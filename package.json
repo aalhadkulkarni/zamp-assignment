@@ -1,0 +1,26 @@
+{
+  "name": "zamp-assignment",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "concurrently -n web,agent,customer -c cyan,green,magenta \"npm:dev:web\" \"npm:dev:agent\" \"npm:dev:customer\"",
+    "dev:web": "npm run dev --workspace apps/agent-web",
+    "dev:agent": "npm run dev --workspace apps/agent-api",
+    "dev:customer": "npm run dev --workspace apps/customer-system"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "workspaces": [
+    "apps/*"
+  ],
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.4"
+  }
+}
