@@ -78,5 +78,18 @@ Files are validated by extension rather than MIME type, because browsers disagre
 Validation happens in the browser when the file is picked, and it's synchronous, so a staged file is either ready or rejected with a reason. There's no progress state to show, and inventing one would be theatre. The actual upload to the backend is a single request for all files, so there's nothing per-file to report there either.
 
 
+8 - Every message must carry at least one document. There is no free-text chat.
+
+The send button stays disabled until a usable document is staged. You can type into the message box on its own, but you can't send on its own, and when you try the UI says why: attach a document to send.
+
+Why - this falls straight out of decision 3. I chose 3a, where the analyst corrects values by editing them in the table and the agent infers the reason. I put 3b, where the analyst tells the agent what's wrong in words, out of scope. A free-text message box that sends is 3b. If I shipped one, the analyst would use it - it's the obvious thing to do when there's a text box and a send button - and every message would land on a system with nothing to do with it. Better to not offer the action than to accept it and drop it.
+
+So the text box is scoped down to what 3a actually needs: context that travels with the documents. Which table to use, that figures are in thousands, that the fund changed actuary that year. It's an argument to the upload, not a channel of its own.
+
+This also means adding documents later is a first-class thing, not an edge case. The analyst can come back to a draft, attach more documents with more context, and send again. That is the only way to say something to the agent, which is deliberate.
+
+Where this loosens - step 10, rejecting a hypothesis. When the agent proposes a reason for an edit and the analyst says it's wrong, the correction is prose and there's no document attached to it. That input belongs on the hypothesis itself, not in a general message box, so that the explanation is structurally tied to the hypothesis it refutes. Working out which hypothesis a loose message referred to is the same guessing problem this project exists to avoid, and I'm not going to reintroduce it in the chrome.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.
