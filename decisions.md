@@ -49,5 +49,34 @@ Why -
 As mentioned above in assumption 1, I have a real world use case where I talked to an actual employee who works on this problem. The system is domain-agnostic. The target schema and field definitions are per-tenant configuration, not code. For the demo I've used public pension fund ACFRs as the use case, because they're publicly available, genuinely messy, and report the same standardised concepts in materially different layouts across issuers, which is exactly the kind of variation the learning loop needs to be tested against.
 
 
+5 - The analyst picks the fund before uploading anything.
+
+The flow is: landing page listing existing analyses, start a new one, pick a fund from a dropdown, then land on a page that asks for documents. The fund is chosen by the human, not inferred from the documents.
+
+Why - the fund is the entity the values get written against in the customer's system. Getting it wrong means correct values written to the wrong record, which is worse than a failed extraction because nothing looks broken. It's also honest to the workflow: the analyst is assigned a fund, so they already know it. Asking the model to infer something the human already knows for certain is spending accuracy for nothing.
+
+Picking the fund first also means we know which schema applies before any extraction runs, so the field definitions are available at the point we need them.
+
+Alternative considered - open on a chat box and let the analyst say what they want in text. Rejected because the task is already known at that point. A blank prompt asks the analyst to invent an instruction they don't have, and it frames the product as a chatbot rather than a document-to-data tool. The text box is still there, below the upload control, but as somewhere to add context ("figures are in thousands", "use the table on page 4") rather than as the way in.
+
+Deliberately cut for now - reopening an analysis that has already been approved and written. Resuming a draft is a read of state we already hold. Editing an approved one means a second write path against customer-system, updating rows that its uniqueness constraint is there to protect. That's a real feature but it's not on the path to the learning loop, so approved analyses are read-only.
+
+
+6 - No router.
+
+There are two screens and a workspace, and view state is held in App. React Router would be the reflex here and I didn't add it.
+
+Why - it earns its place when URLs need to be shareable or bookmarkable. Analyses are currently in memory in the browser, so there is nothing stable to link to. When they move to agent-api and get real ids, a URL per analysis becomes worth having, and that's the point to add it.
+
+
+7 - Accepted file types: pdf, txt, md.
+
+Cut .doc and .docx. They're binary, they need a parser dependency and a conversion step, and the model API won't take them directly the way it takes PDFs. Every document in the demo domain is a PDF, so supporting them would be work against a case that doesn't occur here.
+
+Files are validated by extension rather than MIME type, because browsers disagree about the type of a .md file - some report an empty string.
+
+Validation happens in the browser when the file is picked, and it's synchronous, so a staged file is either ready or rejected with a reason. There's no progress state to show, and inventing one would be theatre. The actual upload to the backend is a single request for all files, so there's nothing per-file to report there either.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.
