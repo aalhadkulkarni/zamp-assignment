@@ -19,9 +19,14 @@ export default function Composer({ onSend }: Props) {
 
   function addFiles(incoming: FileList | null) {
     if (!incoming) return;
+    // A FileList is a live view of the input, and the caller resets the input as
+    // soon as this returns. Snapshot it here — reading it inside the updater,
+    // which React runs later, would find it already empty.
+    const picked = Array.from(incoming);
+
     setStaged((current) => {
       const next = [...current];
-      for (const file of Array.from(incoming)) {
+      for (const file of picked) {
         if (isDuplicate(next, file)) continue;
         next.push(stageFile(file));
       }
@@ -106,7 +111,18 @@ export default function Composer({ onSend }: Props) {
       />
 
       <div className="composer-actions">
-        <button className="primary" onClick={send} disabled={!canSend}>
+        {/* A disabled button with no stated reason is the thing people get stuck on. */}
+        {!canSend && text.trim() !== '' && (
+          <p className="subtle" id="send-hint">
+            Attach a document to send.
+          </p>
+        )}
+        <button
+          className="primary"
+          onClick={send}
+          disabled={!canSend}
+          aria-describedby={!canSend && text.trim() !== '' ? 'send-hint' : undefined}
+        >
           Send
         </button>
       </div>

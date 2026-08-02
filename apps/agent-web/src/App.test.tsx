@@ -150,6 +150,39 @@ describe('sending', () => {
     expect(screen.getByText('use the table on page 4')).toBeInTheDocument();
   });
 
+  /**
+   * Regression: addFiles used to read the input's FileList inside the state
+   * updater, after the handler had already reset the input to re-enable
+   * re-picking. A FileList is a live view, so it was empty by then and the
+   * second document never staged.
+   */
+  it('accepts more documents after a message has been sent', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    const input = screen.getByLabelText(/Choose documents/);
+    await user.upload(input, pdf('first.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await user.upload(input, pdf('second.pdf'));
+
+    expect(screen.getByText('second.pdf')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('says why sending is blocked when only text has been entered', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    expect(screen.queryByText(/Attach a document to send/)).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Additional context'), 'also consider this');
+    expect(screen.getByText(/Attach a document to send/)).toBeInTheDocument();
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    expect(screen.queryByText(/Attach a document to send/)).not.toBeInTheDocument();
+  });
+
   it('clears the composer so the next message starts clean', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
