@@ -165,70 +165,39 @@ Visible in two places, deliberately. The service logs a warning at startup, and 
 .env.example ships with USE_FIXTURES=true, so a fresh clone runs with no key and no spend. Turning it off is the deliberate act, and it's the one that costs money.
 
 
-15 - What we integrate with is the customer's API, not their database.
+15 - We integrate against the customer's API, not their database.
 
-I had started sketching customer-system as a generic (entity, period, field, value) table. That's wrong, and not just cosmetically.
+customer-system is a stand-in for something we don't own. I'm building it only so the boundary is real, and its internals are not my decisions to defend - which fund names it seeds, what its tables look like, how it persists rows. What matters is the interface:
 
-customer-system is the customer's system of record. A real analytics firm doesn't keep pension data in a shapeless key-value table; they keep it in a model shaped like their business. If I invent a generic schema for them, I'm designing their database for my own convenience, which is exactly the thing decision 1 rejects. It also makes the integration story a lie: we'd be claiming to map into an existing system while quietly requiring that system to look however suits us.
-
-So customer-system has an opinionated schema, and agent-api never sees it. What crosses the boundary is HTTP:
-
-  GET  /funds                     which plans exist
+  GET  /funds                     which funds exist
   GET  /field-definitions         the contract we map into
   POST /funds/:id/reports         the write
   GET  /funds/:id/reports         read back
 
-The domain-agnostic property belongs on our side, not theirs. agent-api knows nothing about pensions - it asks /field-definitions what to extract. That claim is only worth anything if the customer's schema is genuinely specific, which it now is.
+I started sketching it as a generic (entity, period, field, value) table and stopped, because that would have made the integration story a lie. We'd be claiming to map into a system that already exists while quietly requiring it to look however suits us - the thing decision 1 rejects. So it has an opinionated schema and agent-api never sees it.
+
+The domain-agnostic property belongs on our side. agent-api knows nothing about pensions; it asks /field-definitions what to extract. That claim is only worth something if the customer's schema is genuinely specific.
+
+Two things about it are deliberate rather than incidental:
+
+It is strict enough to actually refuse us. Required fields, type checks, a range check, and a uniqueness constraint on fund plus fiscal year. Uploading the same document twice is rejected by their database, not by ours. Handling that rejection is the point; a permissive stand-in would have made the whole boundary decorative.
+
+It stores whole dollars. The CalPERS page is headed "Dollars in Thousands", stated once, a long way from the numbers it governs - $462,090,073 there means $462 billion. Units are a property of the document, not the data, so normalising happens on our side before the write. That's our decision, and it gives the units lesson somewhere real to apply.
 
 The browser never calls customer-system directly. It goes through agent-api, because a real integration carries per-customer credentials and those belong server-side for the same reason the Anthropic key does.
 
+Caveat worth stating once: it uses SQLite, which persists locally but not on Render, whose free tier has an ephemeral filesystem. Free Postgres would persist but expires after 30 days, which fails less honestly - someone opening this in a month would get connection errors and conclude the project is broken. Nothing in the build depends on data surviving a restart.
 
-16 - A fund is the whole retirement system, not one plan inside it.
+
+16 - I did not design the hard part out of the fund list.
 
 CalPERS is one fund. Not CalPERS PERF A, CalPERS PERF B and so on.
 
-I initially modelled it the other way. The CalPERS statement of fiduciary net position puts six plans side by side as columns on one page - PERF A, PERF B, PERF C, and the Legislators' and two Judges' funds - so "Total Investments" is six numbers on that page, not one. Making the analyst pick a plan would settle which column to read before extraction ever ran.
+I had it the other way round at first. The statement of fiduciary net position puts six plans side by side as columns, so "Total Investments" is six numbers on one page, and keying the fund list on plans would have settled which column to read before extraction ever ran.
 
-That's the wrong instinct, for two reasons.
+That's tempting and wrong. It doesn't match the job - an analyst is assigned CalPERS, nobody is assigned PERF C - and more importantly it doesn't solve the ambiguity, it hides it. Which column, or which combination, answers "total investments for CalPERS" is a real question about a real document. Getting it wrong produces exactly the correction this project exists to learn from: "you read PERF B's column, I wanted the total", with a diagnosis behind it and a scope that reaches every future CalPERS document.
 
-It doesn't match the job. An analyst is assigned CalPERS. Nobody is assigned PERF C. And the customer wants figures for CalPERS, because that's the entity they're forming a view about.
-
-More importantly, picking the plan up front doesn't solve the column problem, it hides it. Which column - or which combination of columns - answers "total investments for CalPERS" is a real question about a real document, and it's exactly the kind of thing the agent will get wrong in an interesting way. "You read PERF B's column, I wanted the total across the plans" is a correction with a genuine diagnosis behind it and a scope that reaches every future CalPERS document. Designing that ambiguity out of existence would have removed one of the better demonstrations of the thing this project is actually about.
-
-So the fund list is five systems - CalPERS, CalSTRS, New York State Common, Texas TRS, Florida FRS - and the six-column page stays hard on purpose.
-
-
-17 - Only the totals, stored in whole dollars.
-
-total_receivables, total_investments, total_assets, total_liabilities, net_position.
-
-Five fields. Reports differ enormously between funds, and mapping every line on one CalPERS page would be fitting the schema to one document. Totals are the concepts every plan reports.
-
-They're also where the interesting variation lives. net_position appears as "Net Position Restricted for Pensions", "Plan Net Assets", "Total Fiduciary Net Position" depending on the issuer. Same concept, different label - which is the synonym problem, available for free because we only had to name the concept once.
-
-Amounts are whole USD. The CalPERS page is headed "Dollars in Thousands", stated once, a long way from the numbers it governs - $462,090,073 there means $462 billion. Units are a property of the document, not of the data, so normalising happens before the write and the stored value is unambiguous. That also gives the units lesson somewhere real to apply.
-
-What I deliberately did not add: a CHECK that net_position equals assets minus liabilities. It doesn't - the real identity includes deferred outflows and inflows, which we don't collect, and for PERF A the two sides differ by exactly those amounts. An invariant that is subtly wrong is worse than none.
-
-
-18 - SQLite, and it will not persist on Render.
-
-customer-system stores rows in SQLite via node:sqlite, which ships with Node 22 - no dependency. The API is marked experimental, which is why the repo pins Node 22.
-
-Render's free web services have an ephemeral filesystem and can't attach a persistent disk, so the database file is wiped on every redeploy, restart and inactivity spin-down. Locally it persists properly.
-
-I still chose it over the alternatives. In-memory is strictly worse - same behaviour on Render, no persistence locally, and no real constraint engine. Free Render Postgres persists but expires 30 days after creation, which is a worse failure: someone opening the repo five weeks from now gets connection errors and concludes the project is broken, when the cause is a free-tier clock. SQLite fails by starting empty, which is honest and self-explanatory. Making it durable is a paid instance with a disk, not a rewrite.
-
-The constraints are the point, and those work either way:
-
-  UNIQUE (fund_id, fiscal_year_end)   one statement per plan per year
-  NOT NULL on every amount
-  CHECK (total_assets > 0), others >= 0
-  FOREIGN KEY fund_id -> fund          with PRAGMA foreign_keys ON, which SQLite leaves off
-
-Uploading the same document twice is rejected with 409 by the customer's database, not by us. That's the rejection worth demoing: a constraint we don't own, failing a write we thought was fine.
-
-Validation errors report every problem at once rather than one per attempt. Fixing a form field at a time, resubmitting to discover the next one, is the interaction I'd least want an analyst to have.
+Removing that would have removed one of the better demonstrations of the whole idea. So the fund list is five retirement systems and the six-column page stays hard on purpose.
 
 
 Stack -
