@@ -2,7 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { ApiError, uploadDocuments } from './api';
+import { ApiError, uploadDocuments, type UploadResult } from './api';
 import { MAX_FILE_BYTES } from './files';
 import { FUNDS } from './funds';
 
@@ -13,13 +13,22 @@ vi.mock('./api', async (importOriginal) => ({
 
 const mockUpload = vi.mocked(uploadDocuments);
 
+const AGENT_TEXT = 'Received your two documents. Extraction is next.';
+
 /** Echoes back what the real endpoint returns for an accepted upload. */
-function accepts() {
+function accepts(overrides: Partial<UploadResult> = {}) {
   mockUpload.mockImplementation(async (analysisId, files, prompt) => ({
     uploadId: 'upload-1',
     analysisId,
     prompt,
     documents: files.map((f, i) => ({ id: `doc-${i}`, filename: f.name, size: f.size })),
+    agent: {
+      model: 'claude-opus-5',
+      text: AGENT_TEXT,
+      usage: { inputTokens: 120, outputTokens: 14 },
+    },
+    agentError: null,
+    ...overrides,
   }));
 }
 
@@ -146,7 +155,7 @@ describe('staging documents', () => {
 });
 
 describe('sending', () => {
-  it('confirms what the server stored, with sizes', async () => {
+  it("shows the agent's own reply rather than a canned confirmation", async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
 
@@ -157,11 +166,29 @@ describe('sending', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     const log = screen.getByRole('log');
-    expect(
-      await within(log).findByText(
-        /Stored 2 documents: page-4\.pdf \(2 KB\), page-5\.pdf \(4 KB\)/,
-      ),
-    ).toBeInTheDocument();
+    expect(await within(log).findByText(AGENT_TEXT)).toBeInTheDocument();
+  });
+
+  /**
+   * The documents reached the server; only the model call failed. Saying the
+   * upload failed would send the analyst back to re-pick files we already have.
+   */
+  it('reports a stored upload whose model call failed, without losing the documents', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    accepts({
+      agent: null,
+      agentError: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+    });
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/stored, but the assistant could not be reached/)).
+      toBeInTheDocument();
+    expect(screen.getByText(/Anthropic is rate limiting us/)).toBeInTheDocument();
+    // Composer still clears — the upload itself succeeded.
+    expect(screen.getByLabelText('Additional context')).toHaveValue('');
   });
 
   it('posts the documents and the typed context to the analysis being viewed', async () => {
@@ -293,7 +320,7 @@ describe('when the upload is refused', () => {
     accepts();
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(await screen.findByText(/Stored 1 document: acfr\.pdf/)).toBeInTheDocument();
+    expect(await screen.findByText(AGENT_TEXT)).toBeInTheDocument();
     expect(screen.getByLabelText('Additional context')).toHaveValue('');
   });
 });

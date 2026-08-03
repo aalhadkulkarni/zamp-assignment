@@ -6,11 +6,22 @@ export type UploadedDocument = {
   size: number;
 };
 
+export type ModelReply = {
+  model: string;
+  text: string;
+  usage: { inputTokens: number; outputTokens: number };
+};
+
+export type ModelFailure = { code: string; message: string };
+
 export type UploadResult = {
   uploadId: string;
   analysisId: string;
   prompt: string;
   documents: UploadedDocument[];
+  /** Null when the model could not be reached — the documents are stored either way. */
+  agent: ModelReply | null;
+  agentError: ModelFailure | null;
 };
 
 /**

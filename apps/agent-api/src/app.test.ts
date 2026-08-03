@@ -1,10 +1,39 @@
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
 import { uploadDir } from './documents.js';
+
+/**
+ * The Anthropic SDK is stubbed for every test in this file. The upload route
+ * calls the model, and a test suite that spends tokens on each run is a test
+ * suite people stop running.
+ */
+const create = vi.fn();
+
+vi.mock('@anthropic-ai/sdk', () => {
+  class APIError extends Error {
+    status: number;
+    constructor(status: number) {
+      super(`api error ${status}`);
+      this.status = status;
+    }
+  }
+  class AuthenticationError extends APIError {}
+  class RateLimitError extends APIError {}
+
+  // A class, not an arrow function — the real SDK is constructed with `new`.
+  class Anthropic {
+    messages = { create };
+    static APIError = APIError;
+    static AuthenticationError = AuthenticationError;
+    static RateLimitError = RateLimitError;
+  }
+
+  return { default: Anthropic };
+});
 
 /**
  * These run against a listening server rather than app.inject, because the thing
@@ -34,12 +63,36 @@ afterAll(async () => {
   await rm(dataRoot, { recursive: true, force: true });
 });
 
+beforeEach(() => {
+  create.mockReset();
+  process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
+  create.mockResolvedValue({
+    model: 'claude-opus-5',
+    stop_reason: 'end_turn',
+    content: [{ type: 'text', text: 'Received your documents. Extraction is next.' }],
+    usage: { input_tokens: 120, output_tokens: 14 },
+  });
+});
+
 afterEach(async () => {
   await rm(join(dataRoot, TENANT), { recursive: true, force: true });
 });
 
 function pdf(name: string, size = 64): File {
   return new File([new Uint8Array(size)], name, { type: 'application/pdf' });
+}
+
+/**
+ * The stubbed SDK error classes take just a status, where the real ones take
+ * several arguments. The cast is the seam between the two.
+ */
+async function sdkError(
+  kind: 'APIError' | 'AuthenticationError' | 'RateLimitError',
+  status: number,
+): Promise<Error> {
+  const { default: Anthropic } = await import('@anthropic-ai/sdk');
+  const Stub = Anthropic[kind] as unknown as new (status: number) => Error;
+  return new Stub(status);
 }
 
 async function upload(
@@ -161,6 +214,82 @@ describe('POST /analyses/:analysisId/documents', () => {
       body: JSON.stringify({ prompt: 'hello' }),
     });
     expect(response.status).toBe(415);
+  });
+
+  it('returns the model reply alongside the stored documents', async () => {
+    const { status, body } = await upload([pdf('acfr.pdf')]);
+
+    expect(status).toBe(200);
+    expect(body.agent).toEqual({
+      model: 'claude-opus-5',
+      text: 'Received your documents. Extraction is next.',
+      usage: { inputTokens: 120, outputTokens: 14 },
+    });
+    expect(body.agentError).toBeNull();
+  });
+
+  it('tells the model what was uploaded, and quotes the analyst note', async () => {
+    await upload([pdf('acfr.pdf'), pdf('notes.md')], {
+      prompt: 'Figures are in thousands.',
+    });
+
+    const [{ messages }] = create.mock.calls[0];
+    expect(messages[0].content).toContain('acfr.pdf');
+    expect(messages[0].content).toContain('notes.md');
+    expect(messages[0].content).toContain('Figures are in thousands.');
+  });
+
+  /**
+   * The documents are already on disk when the model is called. Reporting a
+   * model failure as a failed upload would make the analyst re-send files we
+   * already have, and could leave a second copy behind.
+   */
+  describe('when the model call fails', () => {
+    async function failWith(error: unknown) {
+      create.mockRejectedValue(error);
+      return upload([pdf('acfr.pdf', 128)]);
+    }
+
+    it('still reports the upload as succeeded, with the reason attached', async () => {
+      const { status, body } = await failWith(await sdkError('RateLimitError', 429));
+
+      expect(status).toBe(200);
+      expect(body.documents).toHaveLength(1);
+      expect(body.agent).toBeNull();
+      expect(body.agentError).toEqual({
+        code: 'RateLimited',
+        message: expect.stringMatching(/rate limiting/i),
+      });
+    });
+
+    it('still writes the documents to disk', async () => {
+      await failWith(await sdkError('APIError', 529));
+
+      const written = await readdir(uploadDir(TENANT, ANALYSIS));
+      expect(written.some((f) => f.endsWith('acfr.pdf'))).toBe(true);
+    });
+
+    it('names a missing API key rather than blaming the upload', async () => {
+      delete process.env.ANTHROPIC_API_KEY;
+      const { status, body } = await upload([pdf('acfr.pdf')]);
+
+      expect(status).toBe(200);
+      expect(body.agentError.code).toBe('NotConfigured');
+      expect(body.documents).toHaveLength(1);
+    });
+
+    it('reports a refusal as its own outcome', async () => {
+      create.mockResolvedValue({
+        model: 'claude-opus-5',
+        stop_reason: 'refusal',
+        content: [],
+        stop_details: { category: 'cyber' },
+        usage: { input_tokens: 5, output_tokens: 0 },
+      });
+
+      const { body } = await upload([pdf('acfr.pdf')]);
+      expect(body.agentError.code).toBe('ModelRefused');
+    });
   });
 
   it('stores a document whose name would otherwise escape the upload folder', async () => {

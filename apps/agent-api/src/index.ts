@@ -1,10 +1,20 @@
+import { fileURLToPath } from 'node:url';
+
 // Node 22 can read a .env file itself, so there is no dotenv dependency here.
-// It throws when the file is absent, which is the normal case in production
-// where the platform supplies the environment directly.
+//
+// fileURLToPath, not URL.pathname: pathname leaves the path percent-encoded, so
+// a directory containing a space resolves to a file that does not exist.
+const envFile = fileURLToPath(new URL('../.env', import.meta.url));
+
 try {
-  process.loadEnvFile(new URL('../.env', import.meta.url).pathname);
-} catch {
-  // No .env — environment variables are expected to be set already.
+  process.loadEnvFile(envFile);
+} catch (error) {
+  // A missing file is the normal case in production, where the platform sets
+  // the environment directly. Anything else — unreadable, malformed — is a real
+  // problem, and swallowing it once already hid a bug.
+  if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+    console.warn(`Could not read ${envFile}:`, error);
+  }
 }
 
 const { buildApp } = await import('./app.js');

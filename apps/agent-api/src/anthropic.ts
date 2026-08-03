@@ -43,6 +43,47 @@ export type Reply = {
   usage: { inputTokens: number; outputTokens: number };
 };
 
+export type ModelFailure = { code: string; message: string };
+
+/**
+ * Turns a thrown error into something an analyst can read. Returns null for
+ * anything unrecognised so it propagates and shows up as a 500 rather than
+ * being quietly relabelled as a model problem.
+ */
+export function describeFailure(error: unknown): ModelFailure | null {
+  if (error instanceof MissingApiKeyError) {
+    return { code: 'NotConfigured', message: 'The server has no Anthropic API key configured.' };
+  }
+  if (error instanceof RefusedError) {
+    return { code: 'ModelRefused', message: error.message };
+  }
+  if (error instanceof Anthropic.AuthenticationError) {
+    return {
+      code: 'UpstreamAuthFailed',
+      message: "The server's Anthropic credentials were rejected.",
+    };
+  }
+  if (error instanceof Anthropic.RateLimitError) {
+    return { code: 'RateLimited', message: 'Anthropic is rate limiting us. Try again shortly.' };
+  }
+  if (error instanceof Anthropic.APIError) {
+    // Pass the upstream message through. "Anthropic returned 400" sent me
+    // debugging the request shape when the real answer — an empty credit
+    // balance — was sitting in the body all along.
+    return {
+      code: 'UpstreamError',
+      message: `Anthropic returned ${error.status}: ${upstreamMessage(error)}`,
+    };
+  }
+  return null;
+}
+
+/** Digs the human-readable message out of an SDK error, whatever shape it took. */
+function upstreamMessage(error: Error): string {
+  const body = (error as { error?: { error?: { message?: string } } }).error;
+  return body?.error?.message ?? error.message;
+}
+
 /**
  * One prompt, one answer, no documents and no tools. This exists to prove the
  * integration works end to end before anything depends on it.

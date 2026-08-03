@@ -3,7 +3,6 @@ import { ApiError, uploadDocuments } from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
-import { formatBytes } from './files';
 import { FUNDS } from './funds';
 import type { Analysis, ChatMessage } from './types';
 import './App.css';
@@ -61,22 +60,25 @@ export default function App() {
   async function send(analysisId: string, text: string, files: File[]): Promise<boolean> {
     try {
       const result = await uploadDocuments(analysisId, files, text);
-      const received = result.documents
-        .map((d) => `${d.filename} (${formatBytes(d.size)})`)
-        .join(', ');
+      const analystMessage: ChatMessage = {
+        ...message('analyst', text),
+        attachments: files.map((f) => ({ name: f.name, size: f.size })),
+      };
 
-      append(analysisId, [
-        {
-          ...message('analyst', text),
-          attachments: files.map((f) => ({ name: f.name, size: f.size })),
-        },
-        message(
-          'agent',
-          `Stored ${result.documents.length} ` +
-            `${result.documents.length === 1 ? 'document' : 'documents'}: ${received}. ` +
-            'Extraction comes next.',
-        ),
-      ]);
+      // The documents are stored whether or not the model answered, so the
+      // failure branch has to say that rather than reading like a lost upload.
+      const agentMessage = result.agent
+        ? message('agent', result.agent.text)
+        : {
+            ...message(
+              'agent',
+              `Your ${result.documents.length === 1 ? 'document is' : 'documents are'} stored, ` +
+                `but the assistant could not be reached. ${result.agentError?.message ?? ''}`.trim(),
+            ),
+            variant: 'error' as const,
+          };
+
+      append(analysisId, [analystMessage, agentMessage]);
       return true;
     } catch (error) {
       const detail =
