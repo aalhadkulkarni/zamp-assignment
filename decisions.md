@@ -165,5 +165,63 @@ Visible in two places, deliberately. The service logs a warning at startup, and 
 .env.example ships with USE_FIXTURES=true, so a fresh clone runs with no key and no spend. Turning it off is the deliberate act, and it's the one that costs money.
 
 
+15 - What we integrate with is the customer's API, not their database.
+
+I had started sketching customer-system as a generic (entity, period, field, value) table. That's wrong, and not just cosmetically.
+
+customer-system is the customer's system of record. A real analytics firm doesn't keep pension data in a shapeless key-value table; they keep it in a model shaped like their business. If I invent a generic schema for them, I'm designing their database for my own convenience, which is exactly the thing decision 1 rejects. It also makes the integration story a lie: we'd be claiming to map into an existing system while quietly requiring that system to look however suits us.
+
+So customer-system has an opinionated schema, and agent-api never sees it. What crosses the boundary is HTTP:
+
+  GET  /funds                     which plans exist
+  GET  /field-definitions         the contract we map into
+  POST /funds/:id/reports         the write
+  GET  /funds/:id/reports         read back
+
+The domain-agnostic property belongs on our side, not theirs. agent-api knows nothing about pensions - it asks /field-definitions what to extract. That claim is only worth anything if the customer's schema is genuinely specific, which it now is.
+
+The browser never calls customer-system directly. It goes through agent-api, because a real integration carries per-customer credentials and those belong server-side for the same reason the Anthropic key does.
+
+
+16 - A fund is a plan, not an issuer.
+
+The CalPERS statement of fiduciary net position puts six plans side by side as columns on one page - PERF A, PERF B, PERF C, and the Legislators' and two Judges' funds. "Total Investments" isn't one number on that page, it's six.
+
+So the thing an analyst is assigned, and the thing a row is keyed by, has to be the plan. If the analyst picked "CalPERS" the agent would still be guessing which column to read, and every candidate would look equally plausible. Picking the plan up front removes a whole class of wrong answers before extraction starts.
+
+
+17 - Only the totals, stored in whole dollars.
+
+total_receivables, total_investments, total_assets, total_liabilities, net_position.
+
+Five fields. Reports differ enormously between funds, and mapping every line on one CalPERS page would be fitting the schema to one document. Totals are the concepts every plan reports.
+
+They're also where the interesting variation lives. net_position appears as "Net Position Restricted for Pensions", "Plan Net Assets", "Total Fiduciary Net Position" depending on the issuer. Same concept, different label - which is the synonym problem, available for free because we only had to name the concept once.
+
+Amounts are whole USD. The CalPERS page is headed "Dollars in Thousands", stated once, a long way from the numbers it governs - $462,090,073 there means $462 billion. Units are a property of the document, not of the data, so normalising happens before the write and the stored value is unambiguous. That also gives the units lesson somewhere real to apply.
+
+What I deliberately did not add: a CHECK that net_position equals assets minus liabilities. It doesn't - the real identity includes deferred outflows and inflows, which we don't collect, and for PERF A the two sides differ by exactly those amounts. An invariant that is subtly wrong is worse than none.
+
+
+18 - SQLite, and it will not persist on Render.
+
+customer-system stores rows in SQLite via node:sqlite, which ships with Node 22 - no dependency. The API is marked experimental, which is why the repo pins Node 22.
+
+Render's free web services have an ephemeral filesystem and can't attach a persistent disk, so the database file is wiped on every redeploy, restart and inactivity spin-down. Locally it persists properly.
+
+I still chose it over the alternatives. In-memory is strictly worse - same behaviour on Render, no persistence locally, and no real constraint engine. Free Render Postgres persists but expires 30 days after creation, which is a worse failure: someone opening the repo five weeks from now gets connection errors and concludes the project is broken, when the cause is a free-tier clock. SQLite fails by starting empty, which is honest and self-explanatory. Making it durable is a paid instance with a disk, not a rewrite.
+
+The constraints are the point, and those work either way:
+
+  UNIQUE (fund_id, fiscal_year_end)   one statement per plan per year
+  NOT NULL on every amount
+  CHECK (total_assets > 0), others >= 0
+  FOREIGN KEY fund_id -> fund          with PRAGMA foreign_keys ON, which SQLite leaves off
+
+Uploading the same document twice is rejected with 409 by the customer's database, not by us. That's the rejection worth demoing: a constraint we don't own, failing a write we thought was fine.
+
+Validation errors report every problem at once rather than one per attempt. Fixing a form field at a time, resubmitting to discover the next one, is the interaction I'd least want an analyst to have.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

@@ -2,16 +2,24 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { ApiError, uploadDocuments, type UploadResult } from './api';
+import { ApiError, listFunds, uploadDocuments, type UploadResult } from './api';
 import { MAX_FILE_BYTES } from './files';
-import { FUNDS } from './funds';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   uploadDocuments: vi.fn(),
+  listFunds: vi.fn(),
 }));
 
 const mockUpload = vi.mocked(uploadDocuments);
+const mockListFunds = vi.mocked(listFunds);
+
+/** Funds come from the customer's system now, so tests have to stand one in. */
+const FUNDS = [
+  { id: 'calpers-perf-a', name: 'PERF A — Agent Multiple-Employer', issuer: 'CalPERS' },
+  { id: 'calstrs-dbp', name: 'Defined Benefit Program', issuer: 'CalSTRS' },
+];
+const FUND_LABEL = `${FUNDS[0].issuer} — ${FUNDS[0].name}`;
 
 const AGENT_TEXT = 'Received your two documents. Extraction is next.';
 
@@ -40,6 +48,8 @@ function accepts(overrides: Partial<UploadResult> = {}) {
 
 beforeEach(() => {
   mockUpload.mockReset();
+  mockListFunds.mockReset();
+  mockListFunds.mockResolvedValue(FUNDS);
   accepts();
 });
 
@@ -51,6 +61,7 @@ function pdf(name: string, bytes = 2048): File {
 async function startAnalysis(user: ReturnType<typeof userEvent.setup>) {
   render(<App />);
   await user.click(screen.getByRole('button', { name: 'New analysis' }));
+  await screen.findByRole('combobox');
   await user.selectOptions(screen.getByLabelText('Fund'), FUNDS[0].id);
   await user.click(screen.getByRole('button', { name: 'Start analysis' }));
 }
@@ -66,16 +77,42 @@ describe('starting an analysis', () => {
     render(<App />);
 
     await user.click(screen.getByRole('button', { name: 'New analysis' }));
+    await screen.findByRole('combobox');
     expect(screen.getByRole('button', { name: 'Start analysis' })).toBeDisabled();
 
     await user.selectOptions(screen.getByLabelText('Fund'), FUNDS[0].id);
     expect(screen.getByRole('button', { name: 'Start analysis' })).toBeEnabled();
   });
 
+  it('lists funds by issuer, since one issuer runs several plans', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'New analysis' }));
+
+    expect(await screen.findByRole('option', { name: FUND_LABEL })).toBeInTheDocument();
+    expect(mockListFunds).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * The fund list is the customer's data. If their system is down, saying so
+   * beats an empty dropdown that reads as "you have no funds".
+   */
+  it('explains an unreachable customer system instead of showing an empty list', async () => {
+    const user = userEvent.setup();
+    mockListFunds.mockRejectedValue(new ApiError('Could not reach the server.', 0));
+    render(<App />);
+
+    await user.click(screen.getByRole('button', { name: 'New analysis' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Could not reach the server/);
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Start analysis' })).toBeDisabled();
+  });
+
   it('opens the workspace on the chosen fund and asks for documents', async () => {
     await startAnalysis(userEvent.setup());
 
-    expect(screen.getByRole('heading', { name: FUNDS[0].name })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: FUND_LABEL })).toBeInTheDocument();
     expect(screen.getByText(/Upload the documents you want analysed/)).toBeInTheDocument();
   });
 
@@ -84,7 +121,7 @@ describe('starting an analysis', () => {
     await startAnalysis(user);
 
     await user.click(screen.getByRole('button', { name: '← Analyses' }));
-    expect(screen.getByText(FUNDS[0].name)).toBeInTheDocument();
+    expect(screen.getByText(FUND_LABEL)).toBeInTheDocument();
     expect(screen.getByText('draft')).toBeInTheDocument();
   });
 });

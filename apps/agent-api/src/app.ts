@@ -10,6 +10,7 @@ import {
   type Reply,
 } from './anthropic.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
+import { CustomerSystemError, listFunds } from './customer.js';
 import { acknowledgementPrompt } from './prompts.js';
 import {
   isValidAnalysisId,
@@ -32,6 +33,22 @@ export async function buildApp() {
   });
 
   app.get('/health', async () => ({ ok: true, service: 'agent-api' }));
+
+  /**
+   * Passed through from the customer's system rather than held here. Which funds
+   * exist is their fact, not ours, and the day they add one we should not need a
+   * deploy.
+   */
+  app.get('/funds', async (_request, reply) => {
+    try {
+      return await listFunds();
+    } catch (error) {
+      if (error instanceof CustomerSystemError) {
+        return reply.code(502).send({ error: 'CustomerSystemUnavailable', message: error.message });
+      }
+      throw error;
+    }
+  });
 
   app.post<{ Params: { analysisId: string } }>(
     '/analyses/:analysisId/documents',

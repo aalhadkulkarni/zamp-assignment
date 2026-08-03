@@ -38,6 +38,15 @@
   font-weight: 500;
 }
 
+.form-error {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;

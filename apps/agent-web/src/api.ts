@@ -1,5 +1,31 @@
 const AGENT_API = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:3001';
 
+export type Fund = {
+  id: string;
+  name: string;
+  issuer: string;
+};
+
+/**
+ * Via agent-api rather than straight to the customer's system: that integration
+ * carries credentials, and those never belong in the browser.
+ */
+export async function listFunds(): Promise<Fund[]> {
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_API}/funds`);
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection.', 0);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.message ?? 'Could not load funds.', response.status);
+  }
+
+  return response.json();
+}
+
 export type UploadedDocument = {
   id: string;
   /** As the analyst named it. */

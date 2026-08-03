@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import { ApiError, uploadDocuments } from './api';
+import { ApiError, uploadDocuments, type Fund } from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
-import { FUNDS } from './funds';
 import type { Analysis, ChatMessage } from './types';
 import './App.css';
 
@@ -27,14 +26,11 @@ export default function App() {
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [view, setView] = useState<View>({ name: 'list' });
 
-  function startAnalysis(fundId: string) {
-    const fund = FUNDS.find((f) => f.id === fundId);
-    if (!fund) return;
-
+  function startAnalysis(fund: Fund) {
     const analysis: Analysis = {
       id: crypto.randomUUID(),
       fundId: fund.id,
-      fundName: fund.name,
+      fundName: `${fund.issuer} — ${fund.name}`,
       createdAt: new Date().toISOString(),
       status: 'draft',
       messages: [message('agent', OPENING_MESSAGE)],
