@@ -17,13 +17,41 @@ export type StagedFile = {
   rejectionReason?: string;
 };
 
+/**
+ * One correction, captured when the analyst finishes with a field rather than
+ * on every keystroke — otherwise "462090073000" is eleven events.
+ *
+ * The context is snapshotted rather than looked up later. A re-extraction
+ * replaces the fields this came from, and an event that silently starts
+ * describing a different reading is worse than one that is merely stale.
+ */
+export type EditEvent = {
+  id: string;
+  fieldKey: string;
+  /** What the model proposed. */
+  from: string;
+  /** What the analyst set it to. */
+  to: string;
+  at: string;
+  context: {
+    sourceText: string;
+    sourcePage: number | null;
+    confidence: string;
+    reasoning: string;
+  };
+};
+
 export type ChatMessage = {
   id: string;
   author: 'agent' | 'analyst';
   text: string;
   attachments?: { name: string; size: number }[];
-  /** Failures are shown in the log rather than swallowed or put in an alert. */
-  variant?: 'error';
+  /**
+   * 'error' for failures, shown in the log rather than swallowed into an alert.
+   * 'edit' for a captured correction — the line step 10 will attach a proposed
+   * diagnosis to.
+   */
+  variant?: 'error' | 'edit';
   /** Marks a reply that came from a recording, so a demo cannot mislead. */
   fixture?: boolean;
 };
@@ -55,6 +83,12 @@ export type Analysis = {
    * and merging destroys the first.
    */
   edits: Record<string, string>;
+  /**
+   * What the analyst actually changed, in the order they changed it. Distinct
+   * from `edits`: that is the current state of the table, this is the record of
+   * what happened, and step 10 diagnoses the second not the first.
+   */
+  editEvents: EditEvent[];
   /** The reporting period the values belong to. The analyst supplies it. */
   fiscalYearEnd: string;
   /**

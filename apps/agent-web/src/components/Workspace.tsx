@@ -7,6 +7,7 @@ type Props = {
   analysis: Analysis;
   onSend: (text: string, files: File[]) => Promise<boolean>;
   onEdit: (key: string, value: string) => void;
+  onCommit: (key: string) => void;
   onRevert: (key: string) => void;
   onPeriodChange: (fiscalYearEnd: string) => void;
   onConfirm: () => void;
@@ -18,6 +19,7 @@ export default function Workspace({
   analysis,
   onSend,
   onEdit,
+  onCommit,
   onRevert,
   onPeriodChange,
   onConfirm,
@@ -60,6 +62,7 @@ export default function Workspace({
                 problems={analysis.writeProblems}
                 readOnly={approved}
                 onEdit={onEdit}
+                onCommit={onCommit}
                 onRevert={onRevert}
               />
 

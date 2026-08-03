@@ -8,6 +8,8 @@ type Props = {
   /** Approved analyses are read-only: the customer's database now owns them. */
   readOnly: boolean;
   onEdit: (key: string, value: string) => void;
+  /** Fired when the analyst leaves a field, so a correction is captured once. */
+  onCommit: (key: string) => void;
   onRevert: (key: string) => void;
 };
 
@@ -43,6 +45,7 @@ export default function ReviewTable({
   problems,
   readOnly,
   onEdit,
+  onCommit,
   onRevert,
 }: Props) {
   return (
@@ -95,6 +98,7 @@ export default function ReviewTable({
                   disabled={readOnly}
                   aria-invalid={problem ? true : undefined}
                   onChange={(e) => onEdit(field.key, e.target.value)}
+                  onBlur={() => onCommit(field.key)}
                 />
 
                 <span className="readable">{shown ?? 'not found'}</span>

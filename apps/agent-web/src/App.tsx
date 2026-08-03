@@ -9,7 +9,7 @@ import {
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
-import type { Analysis, ChatMessage } from './types';
+import type { Analysis, ChatMessage, EditEvent } from './types';
 import './App.css';
 
 /**
@@ -47,6 +47,7 @@ export default function App() {
       messages: [message('agent', OPENING_MESSAGE)],
       fields: [],
       edits: {},
+      editEvents: [],
       fiscalYearEnd: '',
       writeProblems: {},
     };
@@ -60,7 +61,77 @@ export default function App() {
     // corrections no longer refer to anything. Keeping them would silently
     // apply an old fix to a new value.
     setAnalyses((current) =>
-      current.map((a) => (a.id === analysisId ? { ...a, fields, edits: {} } : a)),
+      current.map((a) =>
+        a.id === analysisId ? { ...a, fields, edits: {}, editEvents: [] } : a,
+      ),
+    );
+  }
+
+  /**
+   * Called when the analyst leaves a field, not while they type. A correction is
+   * one fact — that they changed this value to that one — and capturing it per
+   * keystroke would turn typing a figure into a dozen of them.
+   *
+   * Re-editing the same field replaces its event rather than appending. The
+   * question step 10 asks is "why is this value wrong", and asking it once per
+   * attempt at the same field would produce several diagnoses of one mistake.
+   */
+  function captureEdit(analysisId: string, key: string) {
+    setAnalyses((current) =>
+      current.map((a) => {
+        if (a.id !== analysisId) return a;
+
+        const field = a.fields.find((f) => f.key === key);
+        if (!field) return a;
+
+        const others = a.editEvents.filter((e) => e.fieldKey !== key);
+        const had = a.editEvents.some((e) => e.fieldKey === key);
+
+        // Back to what the model said: not a correction, so not an event.
+        if (!(key in a.edits)) {
+          return had
+            ? {
+                ...a,
+                editEvents: others,
+                messages: [
+                  ...a.messages,
+                  { ...message('agent', `${key} is back to the original value.`), variant: 'edit' as const },
+                ],
+              }
+            : { ...a, editEvents: others };
+        }
+
+        const event: EditEvent = {
+          id: crypto.randomUUID(),
+          fieldKey: key,
+          from: field.value === null ? '' : String(field.value),
+          to: a.edits[key],
+          at: new Date().toISOString(),
+          context: {
+            sourceText: field.sourceText,
+            sourcePage: field.sourcePage,
+            confidence: field.confidence,
+            reasoning: field.reasoning,
+          },
+        };
+
+        return {
+          ...a,
+          editEvents: [...others, event],
+          messages: [
+            ...a.messages,
+            {
+              ...message(
+                'agent',
+                `${key} changed from ${event.from === '' ? 'blank' : event.from} to ${
+                  event.to === '' ? 'blank' : event.to
+                }.`,
+              ),
+              variant: 'edit' as const,
+            },
+          ],
+        };
+      }),
     );
   }
 
@@ -224,6 +295,7 @@ export default function App() {
           analysis={analysis}
           onSend={(text, files) => send(analysis, text, files)}
           onEdit={(key, value) => editField(analysis.id, key, value)}
+          onCommit={(key) => captureEdit(analysis.id, key)}
           onRevert={(key) => revertField(analysis.id, key)}
           onPeriodChange={(fiscalYearEnd) =>
             update(analysis.id, (a) => ({ ...a, fiscalYearEnd }))

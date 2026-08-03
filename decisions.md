@@ -241,5 +241,20 @@ On success the analysis becomes read-only. Their database owns those values now,
 Deliberately deferred: the reporting period. It isn't in the extraction contract - the analyst picks it in the review footer. It's the customer's uniqueness key, so writing without it would be refused anyway and less clearly, which is why the button stays disabled until it's set. Having the model read the period off the document is the obvious next step, and it becomes another field with provenance rather than a special case.
 
 
+20 - An edit is captured when the analyst leaves the field, and one correction is one event.
+
+Captured on blur, not on change. Typing 462090073000 into a box fires eleven change events and none of them are a correction - they're a person part-way through typing a number.
+
+Re-editing the same field replaces its event rather than appending a second one. The question step 10 asks is "why was this value wrong", and a field the analyst tried three values in is still one mistake. Three events would produce three diagnoses of it. If they put the value back to what the model proposed, the event is removed entirely, because nothing is wrong with it any more.
+
+The event's context - the source text, the page, the confidence, the model's reasoning - is snapshotted into the event rather than looked up later. A second upload replaces the fields the event came from, and an event that silently starts describing a different reading of a different document is worse than one that is merely old.
+
+Edit events are kept separate from the edits map even though both describe the same corrections. They answer different questions: the map is what the table shows now, the event list is what happened and in what order. Step 10 diagnoses the second. Merging them would mean the audit record changing shape every time someone typed.
+
+Captured edits appear in the chat as margin notes rather than agent messages, because the agent didn't say them. That's also where step 10 will hang the proposed diagnosis, so the correction and the explanation of it end up in the same place.
+
+Still open, deliberately: whether several edits made together should be diagnosed together. Six values all wrong by a factor of a thousand is one units mistake, not six - but batching costs the tight coupling between an edit and the question about it. Worth deciding against a real example rather than in the abstract.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

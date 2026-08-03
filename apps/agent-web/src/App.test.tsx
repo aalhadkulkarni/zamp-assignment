@@ -422,6 +422,98 @@ describe('sending', () => {
     });
   });
 
+  describe('capturing an edit', () => {
+    async function extracted() {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+      return user;
+    }
+
+    const log = () => screen.getByRole('log');
+
+    /** Captured on blur, not per keystroke — otherwise a figure is a dozen events. */
+    it('records the correction once the analyst leaves the field', async () => {
+      const user = await extracted();
+      const value = screen.getByLabelText('total_investments value');
+
+      await user.clear(value);
+      await user.type(value, '999');
+      // Still typing: nothing captured yet.
+      expect(within(log()).queryByText(/changed from/)).not.toBeInTheDocument();
+
+      await user.tab();
+
+      expect(
+        await within(log()).findByText('total_investments changed from 462090073000 to 999.'),
+      ).toBeInTheDocument();
+    });
+
+    it('records filling in a value the model never found', async () => {
+      const user = await extracted();
+
+      await user.type(screen.getByLabelText('total_receivables value'), '38456658000');
+      await user.tab();
+
+      expect(
+        await within(log()).findByText('total_receivables changed from blank to 38456658000.'),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * One correction is one fact. Capturing every attempt at the same field
+     * would send step 10 several diagnoses of a single mistake.
+     */
+    it('replaces the record when the same field is corrected again', async () => {
+      const user = await extracted();
+      const value = screen.getByLabelText('total_investments value');
+
+      await user.clear(value);
+      await user.type(value, '111');
+      await user.tab();
+      await within(log()).findByText(/to 111\./);
+
+      await user.clear(value);
+      await user.type(value, '222');
+      await user.tab();
+
+      expect(await within(log()).findByText(/to 222\./)).toBeInTheDocument();
+      // The earlier attempt is still in the log as history, but only the latest
+      // is a live correction — which is what step 10 will be given.
+      expect(screen.getByText('1 value corrected.')).toBeInTheDocument();
+    });
+
+    it('says so when a field goes back to what the model proposed', async () => {
+      const user = await extracted();
+      const value = screen.getByLabelText('total_investments value');
+
+      await user.clear(value);
+      await user.type(value, '999');
+      await user.tab();
+
+      await user.clear(value);
+      await user.type(value, '462090073000');
+      await user.tab();
+
+      expect(
+        await within(log()).findByText('total_investments is back to the original value.'),
+      ).toBeInTheDocument();
+      expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
+    });
+
+    it('records nothing when the analyst leaves a field untouched', async () => {
+      const user = await extracted();
+
+      await user.click(screen.getByLabelText('total_investments value'));
+      await user.tab();
+
+      expect(within(log()).queryByText(/changed from/)).not.toBeInTheDocument();
+      expect(within(log()).queryByText(/back to the original/)).not.toBeInTheDocument();
+    });
+  });
+
   describe('writing to the customer system', () => {
     async function reviewed() {
       const user = userEvent.setup();
