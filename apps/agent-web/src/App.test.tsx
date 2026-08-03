@@ -31,6 +31,7 @@ function accepts(overrides: Partial<UploadResult> = {}) {
       model: 'claude-opus-5',
       text: AGENT_TEXT,
       usage: { inputTokens: 120, outputTokens: 14 },
+      fixture: false,
     },
     agentError: null,
     ...overrides,
@@ -160,6 +161,35 @@ describe('staging documents', () => {
 });
 
 describe('sending', () => {
+  it('marks a recorded reply so a demo cannot pass it off as a real call', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    accepts({
+      agent: {
+        model: 'claude-opus-5',
+        text: AGENT_TEXT,
+        usage: { inputTokens: 236, outputTokens: 70 },
+        fixture: true,
+      },
+    });
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('recorded')).toBeInTheDocument();
+  });
+
+  it('does not mark a real reply as recorded', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await screen.findByText(AGENT_TEXT);
+    expect(screen.queryByText('recorded')).not.toBeInTheDocument();
+  });
+
   it("shows the agent's own reply rather than a canned confirmation", async () => {
     const user = userEvent.setup();
     await startAnalysis(user);

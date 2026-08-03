@@ -184,6 +184,15 @@
   border-radius: 10px;
 }
 
+.tag {
+  margin-left: 8px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  letter-spacing: 0.3px;
+}
+
 .message-error .message-text {
   color: var(--danger);
   background: var(--danger-bg);

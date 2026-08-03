@@ -19,11 +19,15 @@ try {
 
 const { buildApp } = await import('./app.js');
 
-if (!process.env.ANTHROPIC_API_KEY) {
+if (process.env.USE_FIXTURES === 'true') {
+  // Loud on purpose. A recorded reply is indistinguishable from a real one in
+  // the UI, so the log is the only place this is visible.
+  console.warn('USE_FIXTURES=true — replies are recorded, the model is not called.');
+} else if (!process.env.ANTHROPIC_API_KEY) {
   // A warning rather than a crash: uploads work without a key, and a service
   // that refuses to start is harder to diagnose than one that says what is
-  // missing. /llm/* returns 503 with the same message.
-  console.warn('ANTHROPIC_API_KEY is not set — /llm/* will return 503.');
+  // missing. The upload response carries the same message in agentError.
+  console.warn('ANTHROPIC_API_KEY is not set — uploads will report NotConfigured.');
 }
 
 const app = await buildApp();

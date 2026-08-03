@@ -69,6 +69,7 @@ describe('ask', () => {
       model: 'claude-opus-5',
       text: 'pong',
       usage: { inputTokens: 12, outputTokens: 3 },
+      fixture: false,
     });
   });
 

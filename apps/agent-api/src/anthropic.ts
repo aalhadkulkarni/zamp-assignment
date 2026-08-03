@@ -41,7 +41,19 @@ export type Reply = {
   model: string;
   text: string;
   usage: { inputTokens: number; outputTokens: number };
+  /** True when this came from a recording rather than the API. */
+  fixture: boolean;
 };
+
+/**
+ * Fixture mode returns a recorded reply instead of calling the API, so that
+ * development and the test suite cost nothing. Off unless asked for — a
+ * deployed service must never serve a recording by accident, and the failure
+ * mode is silent because a fixture looks like a real answer.
+ */
+export function usingFixtures(): boolean {
+  return process.env.USE_FIXTURES === 'true';
+}
 
 export type ModelFailure = { code: string; message: string };
 
@@ -118,5 +130,26 @@ export async function ask(prompt: string): Promise<Reply> {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
     },
+    fixture: false,
+  };
+}
+
+/**
+ * Same signature as `ask`, no network call. The text below is a real reply
+ * recorded from claude-opus-5 on 2026-08-03, not something invented — a made-up
+ * fixture drifts from what the model actually says, and then the UI is tuned
+ * against prose the model never produces.
+ *
+ * The prompt is accepted and ignored. Keeping the signature identical is what
+ * lets the route pick between the two without knowing which it has.
+ */
+export async function askFixture(_prompt: string): Promise<Reply> {
+  return {
+    model: 'claude-opus-5',
+    text:
+      "Received your documents. I haven't opened or read them yet — extraction " +
+      "is the next step, and I'll follow up once that's in place.",
+    usage: { inputTokens: 236, outputTokens: 70 },
+    fixture: true,
   };
 }

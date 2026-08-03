@@ -68,7 +68,7 @@ export default function App() {
       // The documents are stored whether or not the model answered, so the
       // failure branch has to say that rather than reading like a lost upload.
       const agentMessage = result.agent
-        ? message('agent', result.agent.text)
+        ? { ...message('agent', result.agent.text), fixture: result.agent.fixture }
         : {
             ...message(
               'agent',

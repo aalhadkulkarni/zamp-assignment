@@ -146,5 +146,24 @@ Refusals are handled even so, because they aren't errors. A declined request ret
 The route separates upstream failures too. A rejected key is 502, not 401 - our credential is broken, not the caller's, and returning 401 would tell an analyst to log in again when the problem is on our side.
 
 
+14 - Fixture mode is a flag, not a code change.
+
+USE_FIXTURES=true makes the upload return a recorded reply instead of calling Anthropic. Off unless explicitly set.
+
+Why a flag rather than swapping which function the route calls - because the same code has to behave differently in three places at once. Tests must never spend money. Local development mostly shouldn't. The deployed demo must make real calls. If the choice is a code edit then those three can't coexist, and the day someone commits the stubbed version is the day production quietly starts serving a canned answer to every customer. It fails silently, because a fixture looks exactly like a real reply.
+
+That's also why the flag defaults to off and why an exact string match is required - USE_FIXTURES=1 does not enable it. Anything looser and a stray value flips a deployed service into serving recordings.
+
+The recorded text is a real reply captured from claude-opus-5, not something I wrote. An invented fixture drifts from what the model actually produces, and then the UI gets tuned against prose the model never emits.
+
+ask and askFixture have identical signatures, so the route picks between them and doesn't know which it got. That's the whole mechanism:
+
+  const respond = usingFixtures() ? askFixture : ask;
+
+Visible in two places, deliberately. The service logs a warning at startup, and every reply carries fixture: true through to the UI, which shows a "recorded" tag next to the agent's name. A demo that can't be distinguished from a real one is a demo I'd rather not give.
+
+.env.example ships with USE_FIXTURES=true, so a fresh clone runs with no key and no spend. Turning it off is the deliberate act, and it's the one that costs money.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

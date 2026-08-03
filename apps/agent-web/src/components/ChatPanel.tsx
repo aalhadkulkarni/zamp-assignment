@@ -22,6 +22,7 @@ export default function ChatPanel({ messages }: Props) {
         >
           <div className="message-author">
             {message.author === 'agent' ? 'Agent' : 'You'}
+            {message.fixture && <span className="tag">recorded</span>}
           </div>
           {message.text && <p className="message-text">{message.text}</p>}
           {message.attachments && message.attachments.length > 0 && (

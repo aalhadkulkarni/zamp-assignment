@@ -22,6 +22,8 @@ export type ChatMessage = {
   attachments?: { name: string; size: number }[];
   /** Failures are shown in the log rather than swallowed or put in an alert. */
   variant?: 'error';
+  /** Marks a reply that came from a recording, so a demo cannot mislead. */
+  fixture?: boolean;
 };
 
 export type Analysis = {

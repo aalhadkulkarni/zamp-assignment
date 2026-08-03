@@ -65,6 +65,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   create.mockReset();
+  delete process.env.USE_FIXTURES;
   process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
   create.mockResolvedValue({
     model: 'claude-opus-5',
@@ -245,6 +246,7 @@ describe('POST /analyses/:analysisId/documents', () => {
       model: 'claude-opus-5',
       text: 'Received your documents. Extraction is next.',
       usage: { inputTokens: 120, outputTokens: 14 },
+      fixture: false,
     });
     expect(body.agentError).toBeNull();
   });
@@ -310,6 +312,55 @@ describe('POST /analyses/:analysisId/documents', () => {
 
       const { body } = await upload([pdf('acfr.pdf')]);
       expect(body.agentError.code).toBe('ModelRefused');
+    });
+  });
+
+  /**
+   * The point of fixture mode is that development and tests cost nothing, so
+   * the assertion that matters is that no request is made at all.
+   */
+  describe('fixture mode', () => {
+    it('answers from the recording without calling the API', async () => {
+      process.env.USE_FIXTURES = 'true';
+      const { status, body } = await upload([pdf('acfr.pdf')]);
+
+      expect(status).toBe(200);
+      expect(body.agent.fixture).toBe(true);
+      expect(body.agent.text).toMatch(/extraction is the next step/i);
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('works with no API key at all', async () => {
+      process.env.USE_FIXTURES = 'true';
+      delete process.env.ANTHROPIC_API_KEY;
+
+      const { status, body } = await upload([pdf('acfr.pdf')]);
+      expect(status).toBe(200);
+      expect(body.agentError).toBeNull();
+      expect(body.agent.fixture).toBe(true);
+    });
+
+    it('still stores the documents', async () => {
+      process.env.USE_FIXTURES = 'true';
+      await upload([pdf('acfr.pdf', 128)]);
+
+      const written = await readdir(uploadDir(TENANT, ANALYSIS));
+      expect(written.some((f) => f.endsWith('acfr.pdf'))).toBe(true);
+    });
+
+    it('is off unless explicitly switched on', async () => {
+      const { body } = await upload([pdf('acfr.pdf')]);
+
+      expect(body.agent.fixture).toBe(false);
+      expect(create).toHaveBeenCalledOnce();
+    });
+
+    it('is not switched on by a value that merely looks truthy', async () => {
+      process.env.USE_FIXTURES = '1';
+      const { body } = await upload([pdf('acfr.pdf')]);
+
+      expect(body.agent.fixture).toBe(false);
+      expect(create).toHaveBeenCalledOnce();
     });
   });
 

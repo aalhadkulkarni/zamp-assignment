@@ -13,6 +13,8 @@ export type ModelReply = {
   model: string;
   text: string;
   usage: { inputTokens: number; outputTokens: number };
+  /** True when the server answered from a recording instead of calling the model. */
+  fixture: boolean;
 };
 
 export type ModelFailure = { code: string; message: string };

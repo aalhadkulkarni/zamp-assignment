@@ -1,7 +1,14 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import { ask, describeFailure, type ModelFailure, type Reply } from './anthropic.js';
+import {
+  ask,
+  askFixture,
+  describeFailure,
+  usingFixtures,
+  type ModelFailure,
+  type Reply,
+} from './anthropic.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
 import { acknowledgementPrompt } from './prompts.js';
 import {
@@ -109,8 +116,11 @@ export async function buildApp() {
       // field that may be missing, with the reason alongside it.
       let agent: Reply | null = null;
       let agentError: ModelFailure | null = null;
+      // Chosen per request rather than at startup, so a test can flip the flag
+      // without rebuilding the app.
+      const respond = usingFixtures() ? askFixture : ask;
       try {
-        agent = await ask(acknowledgementPrompt(stored.map((d) => d.filename), prompt));
+        agent = await respond(acknowledgementPrompt(stored.map((d) => d.filename), prompt));
       } catch (error) {
         agentError = describeFailure(error);
         if (!agentError) throw error;
