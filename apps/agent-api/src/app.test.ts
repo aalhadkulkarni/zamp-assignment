@@ -44,10 +44,13 @@ const FIELD_DEFINITIONS = [
   { key: 'net_position', label: 'Net Position Restricted for Pensions', type: 'money', unit: 'USD', required: true, description: 'Net position restricted for pension benefits.' },
 ];
 
+const createReport = vi.fn();
+
 vi.mock('./customer.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./customer.js')>()),
   listFieldDefinitions: vi.fn(async () => FIELD_DEFINITIONS),
   listFunds: vi.fn(async () => [{ id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' }]),
+  createReport: (...args: unknown[]) => createReport(...args),
 }));
 
 /**
@@ -80,6 +83,8 @@ afterAll(async () => {
 
 beforeEach(() => {
   create.mockReset();
+  createReport.mockReset();
+  createReport.mockResolvedValue({ ok: true, report: { id: 'report-1' } });
   delete process.env.USE_FIXTURES;
   // The fixture's delay simulates a real call for the UI's benefit. Paying it
   // on every assertion would just make the suite slower.
@@ -469,5 +474,104 @@ describe('POST /analyses/:analysisId/documents', () => {
     const written = await readdir(uploadDir(TENANT, ANALYSIS));
     expect(written.some((f) => f.endsWith('passwd.pdf'))).toBe(true);
     expect(written.every((f) => !f.includes('/'))).toBe(true);
+  });
+});
+
+
+describe('POST /analyses/:analysisId/report', () => {
+  async function write(body: unknown) {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/report`,
+      payload: body,
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  const REPORT = {
+    fundId: 'calpers',
+    fiscalYearEnd: '2025-06-30',
+    values: { total_investments: '462090073000', net_position: '409424367000' },
+  };
+
+  it('writes the values to the customer system', async () => {
+    const { status } = await write(REPORT);
+
+    expect(status).toBe(201);
+    expect(createReport).toHaveBeenCalledWith('calpers', '2025-06-30', {
+      total_investments: 462_090_073_000,
+      net_position: 409_424_367_000,
+    });
+  });
+
+  /**
+   * A money field holding text is forwarded as text rather than converted to
+   * NaN, so their schema is the thing that refuses it and the analyst is told
+   * what is actually wrong.
+   */
+  it('forwards a value it cannot convert rather than guessing', async () => {
+    await write({
+      ...REPORT,
+      values: { ...REPORT.values, total_investments: 'see note 7' },
+    });
+
+    expect(createReport.mock.calls[0][2].total_investments).toBe('see note 7');
+  });
+
+  /** Absent and blank are different claims; their schema decides about absent. */
+  it('omits a value the analyst left empty', async () => {
+    await write({ ...REPORT, values: { ...REPORT.values, net_position: '   ' } });
+
+    expect(createReport.mock.calls[0][2]).not.toHaveProperty('net_position');
+  });
+
+  it('passes the rejection through with its status and per-field reasons', async () => {
+    createReport.mockResolvedValue({
+      ok: false,
+      status: 400,
+      error: 'ValidationFailed',
+      message: 'The report was not stored.',
+      problems: [{ field: 'total_investments', reason: 'Must be a whole number of USD.' }],
+    });
+
+    const { status, body } = await write(REPORT);
+
+    // Their wording, their status. Rewording it would put us between the
+    // analyst and the system that actually refused.
+    expect(status).toBe(400);
+    expect(body).toEqual({
+      error: 'ValidationFailed',
+      message: 'The report was not stored.',
+      problems: [{ field: 'total_investments', reason: 'Must be a whole number of USD.' }],
+    });
+  });
+
+  it('passes a duplicate report through as a conflict', async () => {
+    createReport.mockResolvedValue({
+      ok: false,
+      status: 409,
+      error: 'ReportAlreadyExists',
+      message: 'A report for calpers ending 2025-06-30 is already on file.',
+    });
+
+    const { status, body } = await write(REPORT);
+    expect(status).toBe(409);
+    expect(body.error).toBe('ReportAlreadyExists');
+    expect(body.problems).toEqual([]);
+  });
+
+  it('reports an unreachable customer system as a gateway failure', async () => {
+    const { CustomerSystemError } = await import('./customer.js');
+    createReport.mockRejectedValue(new CustomerSystemError('The customer system could not be reached.', 0));
+
+    const { status, body } = await write(REPORT);
+    expect(status).toBe(502);
+    expect(body.error).toBe('CustomerSystemUnavailable');
+  });
+
+  it('refuses a request missing the fund or the period', async () => {
+    expect((await write({ ...REPORT, fundId: undefined })).status).toBe(400);
+    expect((await write({ ...REPORT, fiscalYearEnd: undefined })).status).toBe(400);
+    expect(createReport).not.toHaveBeenCalled();
   });
 });

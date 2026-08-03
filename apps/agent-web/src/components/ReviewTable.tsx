@@ -3,6 +3,10 @@ import type { ReviewField } from '../api';
 type Props = {
   fields: ReviewField[];
   edits: Record<string, string>;
+  /** Per-field rejections from the customer's system, keyed by field. */
+  problems: Record<string, string>;
+  /** Approved analyses are read-only: the customer's database now owns them. */
+  readOnly: boolean;
   onEdit: (key: string, value: string) => void;
   onRevert: (key: string) => void;
 };
@@ -33,7 +37,14 @@ function readable(raw: string): string | null {
   });
 }
 
-export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) {
+export default function ReviewTable({
+  fields,
+  edits,
+  problems,
+  readOnly,
+  onEdit,
+  onRevert,
+}: Props) {
   return (
     <table className="review-table">
       <thead>
@@ -49,11 +60,16 @@ export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) 
           const current = field.key in edits ? edits[field.key] : original;
           const edited = field.key in edits;
           const shown = readable(current);
+          const problem = problems[field.key];
 
           return (
             <tr
               key={field.key}
-              className={[shown === null ? 'row-blank' : '', edited ? 'row-edited' : '']
+              className={[
+                shown === null ? 'row-blank' : '',
+                edited ? 'row-edited' : '',
+                problem ? 'row-rejected' : '',
+              ]
                 .filter(Boolean)
                 .join(' ')}
             >
@@ -76,12 +92,21 @@ export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) 
                   aria-label={`${field.key} value`}
                   value={current}
                   placeholder="not found"
+                  disabled={readOnly}
+                  aria-invalid={problem ? true : undefined}
                   onChange={(e) => onEdit(field.key, e.target.value)}
                 />
 
                 <span className="readable">{shown ?? 'not found'}</span>
 
-                {edited && (
+                {/* Their wording, not ours. It is their schema that refused. */}
+                {problem && (
+                  <span className="field-problem" role="alert">
+                    {problem}
+                  </span>
+                )}
+
+                {edited && !readOnly && (
                   <button className="link revert" onClick={() => onRevert(field.key)}>
                     revert
                   </button>

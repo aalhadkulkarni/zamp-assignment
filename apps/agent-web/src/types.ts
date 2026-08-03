@@ -55,4 +55,12 @@ export type Analysis = {
    * and merging destroys the first.
    */
   edits: Record<string, string>;
+  /** The reporting period the values belong to. The analyst supplies it. */
+  fiscalYearEnd: string;
+  /**
+   * Per-field rejections from the customer's last write attempt, keyed by
+   * field. Cleared when the analyst changes anything, because a complaint about
+   * a value they have since edited is worse than no complaint.
+   */
+  writeProblems: Record<string, string>;
 };

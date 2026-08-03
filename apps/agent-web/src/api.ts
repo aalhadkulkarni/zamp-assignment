@@ -25,6 +25,55 @@ export async function listFunds(): Promise<Fund[]> {
   return response.json();
 }
 
+export type WriteProblem = { field: string; reason: string };
+
+/**
+ * Carries the customer's own rejection. Their validation messages reach the
+ * analyst unaltered — rewording them would put us between the analyst and the
+ * system that actually refused the write.
+ */
+export class WriteRejected extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly problems: WriteProblem[];
+
+  constructor(message: string, status: number, code: string, problems: WriteProblem[]) {
+    super(message);
+    this.name = 'WriteRejected';
+    this.status = status;
+    this.code = code;
+    this.problems = problems;
+  }
+}
+
+export async function writeReport(
+  analysisId: string,
+  fundId: string,
+  fiscalYearEnd: string,
+  values: Record<string, string>,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_API}/analyses/${analysisId}/report`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fundId, fiscalYearEnd, values }),
+    });
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection.', 0);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new WriteRejected(
+      body?.message ?? `The write failed (${response.status}).`,
+      response.status,
+      body?.error ?? 'WriteRejected',
+      body?.problems ?? [],
+    );
+  }
+}
+
 export type UploadedDocument = {
   id: string;
   /** As the analyst named it. */

@@ -226,5 +226,20 @@ And a units correction becomes a clean lesson. "The multiplier was wrong" is a s
 Related: a value that isn't there comes back as null, never zero. Zero is a real figure on a financial statement - an em-dash in a column means nil and is worth recording as such. Conflating "not present" with "nil" corrupts an aggregate quietly, which is the worst way to corrupt one.
 
 
+19 - A rejected write is an outcome, not an error.
+
+The customer refusing a write is a normal part of this flow, not an exceptional one. A duplicate report, a value out of range, a field they don't recognise - all expected. So the client returns a result rather than throwing, and only a failure to reach them at all is an exception.
+
+Their message reaches the analyst unaltered, and their per-field complaints are shown against the rows they name. I deliberately don't reword them. Their schema is what refused the write; putting our own phrasing in between would make us the apparent author of a rule we don't own, and would go stale the moment they change it.
+
+Coercion is deliberately timid. The analyst's text is converted to a number only when that conversion is unambiguous. A money field holding "see note 7" is forwarded as that string, so their API answers "Must be a number" against that field - rather than us sending NaN, dropping it, or refusing locally. Guessing on their behalf hides a real disagreement about the data. An empty value is omitted rather than sent as null, because absent and blank are different claims and their schema decides about absent.
+
+A rejection clears as soon as the analyst edits the field it named. Continuing to flag a value they have already fixed is worse than not flagging it.
+
+On success the analysis becomes read-only. Their database owns those values now, and offering an edit box that writes nowhere would be a lie about where the data lives.
+
+Deliberately deferred: the reporting period. It isn't in the extraction contract - the analyst picks it in the review footer. It's the customer's uniqueness key, so writing without it would be refused anyway and less clearly, which is why the button stays disabled until it's set. Having the model read the period off the document is the obvious next step, and it becomes another field with provenance rather than a special case.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

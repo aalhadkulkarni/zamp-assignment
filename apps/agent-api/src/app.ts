@@ -10,9 +10,51 @@ import {
   type ModelFailure,
 } from './anthropic.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
-import { CustomerSystemError, listFieldDefinitions, listFunds } from './customer.js';
+import {
+  CustomerSystemError,
+  createReport,
+  listFieldDefinitions,
+  listFunds,
+  type FieldDefinition,
+} from './customer.js';
 import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
 import { extractionPrompt } from './prompts.js';
+
+/**
+ * Turns the text the analyst saw into what the customer's schema asks for.
+ *
+ * Deliberately conservative. A money field holding "see note 7" is forwarded as
+ * that string rather than converted to NaN or dropped, so their API returns
+ * "Must be a number" against that field and the analyst learns what is actually
+ * wrong. Guessing on their behalf would hide a real disagreement about the data.
+ *
+ * An empty value is omitted entirely — absent and blank are different claims,
+ * and their schema decides whether a missing required field is acceptable.
+ */
+function coerce(
+  values: Record<string, string>,
+  definitions: FieldDefinition[],
+): Record<string, unknown> {
+  const byKey = new Map(definitions.map((d) => [d.key, d]));
+  const out: Record<string, unknown> = {};
+
+  for (const [key, raw] of Object.entries(values)) {
+    const text = raw.trim();
+    if (text === '') continue;
+
+    const definition = byKey.get(key);
+    if (definition?.type === 'money') {
+      const asNumber = Number(text);
+      out[key] = Number.isFinite(asNumber) ? asNumber : text;
+    } else {
+      // An unknown key is passed through so their "not a field in this schema"
+      // rejection fires rather than us silently discarding the analyst's work.
+      out[key] = text;
+    }
+  }
+
+  return out;
+}
 
 /** What the analyst gets back: prose for the chat, rows for the table. */
 type ExtractionResult = {
@@ -52,6 +94,45 @@ export async function buildApp() {
   app.get('/funds', async (_request, reply) => {
     try {
       return await listFunds();
+    } catch (error) {
+      if (error instanceof CustomerSystemError) {
+        return reply.code(502).send({ error: 'CustomerSystemUnavailable', message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  /**
+   * The write. Values arrive as the text the analyst saw, and are coerced here
+   * against the customer's own field definitions — but only where the coercion
+   * is unambiguous. Anything that does not convert is forwarded untouched so
+   * that their schema is the one that refuses it, not a guess of ours.
+   */
+  app.post<{
+    Params: { analysisId: string };
+    Body: { fundId?: string; fiscalYearEnd?: string; values?: Record<string, string> };
+  }>('/analyses/:analysisId/report', async (request, reply) => {
+    const { fundId, fiscalYearEnd, values } = request.body ?? {};
+
+    if (!fundId || !fiscalYearEnd || typeof values !== 'object' || values === null) {
+      return reply.code(400).send({
+        error: 'InvalidRequest',
+        message: 'fundId, fiscalYearEnd and values are all required.',
+      });
+    }
+
+    try {
+      const definitions = await listFieldDefinitions();
+      const result = await createReport(fundId, fiscalYearEnd, coerce(values, definitions));
+
+      if (result.ok) return reply.code(201).send(result.report);
+
+      request.log.info({ rejection: result }, 'customer system refused the write');
+      return reply.code(result.status).send({
+        error: result.error,
+        message: result.message,
+        problems: result.problems ?? [],
+      });
     } catch (error) {
       if (error instanceof CustomerSystemError) {
         return reply.code(502).send({ error: 'CustomerSystemUnavailable', message: error.message });

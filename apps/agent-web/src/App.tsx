@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import { ApiError, uploadDocuments, type Fund } from './api';
+import {
+  ApiError,
+  WriteRejected,
+  uploadDocuments,
+  writeReport,
+  type Fund,
+} from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
@@ -25,6 +31,11 @@ export default function App() {
   // In-memory for now. Analyses move to agent-api when there is a backend to hold them.
   const [analyses, setAnalyses] = useState<Analysis[]>([]);
   const [view, setView] = useState<View>({ name: 'list' });
+  const [writing, setWriting] = useState(false);
+
+  function update(analysisId: string, change: (a: Analysis) => Analysis) {
+    setAnalyses((current) => current.map((a) => (a.id === analysisId ? change(a) : a)));
+  }
 
   function startAnalysis(fund: Fund) {
     const analysis: Analysis = {
@@ -36,6 +47,8 @@ export default function App() {
       messages: [message('agent', OPENING_MESSAGE)],
       fields: [],
       edits: {},
+      fiscalYearEnd: '',
+      writeProblems: {},
     };
 
     setAnalyses((current) => [analysis, ...current]);
@@ -71,9 +84,12 @@ export default function App() {
     setAnalyses((current) =>
       current.map((a) => {
         if (a.id !== analysisId) return a;
+        // Any change clears the customer's complaint about that field. Leaving
+        // it would keep flagging a value the analyst has already addressed.
+        const writeProblems = without(a.writeProblems, key);
         return value.trim() === originalValue(a, key)
-          ? { ...a, edits: without(a.edits, key) }
-          : { ...a, edits: { ...a.edits, [key]: value } };
+          ? { ...a, writeProblems, edits: without(a.edits, key) }
+          : { ...a, writeProblems, edits: { ...a.edits, [key]: value } };
       }),
     );
   }
@@ -143,6 +159,59 @@ export default function App() {
     }
   }
 
+  /** The text currently on screen for every field: the analyst's if they
+   *  corrected it, the model's otherwise. */
+  function valuesFor(analysis: Analysis): Record<string, string> {
+    return Object.fromEntries(
+      analysis.fields.map((field) => [
+        field.key,
+        field.key in analysis.edits
+          ? analysis.edits[field.key]
+          : field.value === null
+            ? ''
+            : String(field.value),
+      ]),
+    );
+  }
+
+  /**
+   * The customer's system is the source of truth, so a refusal is theirs to
+   * explain. Their message goes into the chat unaltered and their per-field
+   * complaints go onto the rows they name.
+   */
+  async function confirm(analysis: Analysis) {
+    setWriting(true);
+    try {
+      await writeReport(
+        analysis.id,
+        analysis.fundId,
+        analysis.fiscalYearEnd,
+        valuesFor(analysis),
+      );
+
+      update(analysis.id, (a) => ({ ...a, status: 'approved', writeProblems: {} }));
+      append(analysis.id, [
+        message(
+          'agent',
+          `Written to the customer's system for the period ending ${analysis.fiscalYearEnd}. ` +
+            'This analysis is now read-only.',
+        ),
+      ]);
+    } catch (error) {
+      if (error instanceof WriteRejected) {
+        update(analysis.id, (a) => ({
+          ...a,
+          writeProblems: Object.fromEntries(error.problems.map((p) => [p.field, p.reason])),
+        }));
+      }
+      const text =
+        error instanceof Error ? error.message : 'The write failed for an unknown reason.';
+      append(analysis.id, [{ ...message('agent', text), variant: 'error' }]);
+    } finally {
+      setWriting(false);
+    }
+  }
+
   if (view.name === 'new') {
     return <NewAnalysis onStart={startAnalysis} onCancel={() => setView({ name: 'list' })} />;
   }
@@ -156,8 +225,11 @@ export default function App() {
           onSend={(text, files) => send(analysis, text, files)}
           onEdit={(key, value) => editField(analysis.id, key, value)}
           onRevert={(key) => revertField(analysis.id, key)}
-          // Slice 8 turns this into the POST to customer-system.
-          onConfirm={() => {}}
+          onPeriodChange={(fiscalYearEnd) =>
+            update(analysis.id, (a) => ({ ...a, fiscalYearEnd }))
+          }
+          onConfirm={() => confirm(analysis)}
+          writing={writing}
           onBack={() => setView({ name: 'list' })}
         />
       );

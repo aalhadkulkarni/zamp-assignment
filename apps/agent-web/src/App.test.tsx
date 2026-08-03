@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
 import {
   ApiError,
+  WriteRejected,
   listFunds,
   uploadDocuments,
+  writeReport,
   type ReviewField,
   type UploadResult,
 } from './api';
@@ -15,10 +17,12 @@ vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
   uploadDocuments: vi.fn(),
   listFunds: vi.fn(),
+  writeReport: vi.fn(),
 }));
 
 const mockUpload = vi.mocked(uploadDocuments);
 const mockListFunds = vi.mocked(listFunds);
+const mockWrite = vi.mocked(writeReport);
 
 /** Funds come from the customer's system now, so tests have to stand one in. */
 const FUNDS = [
@@ -81,6 +85,8 @@ beforeEach(() => {
   mockUpload.mockReset();
   mockListFunds.mockReset();
   mockListFunds.mockResolvedValue(FUNDS);
+  mockWrite.mockReset();
+  mockWrite.mockResolvedValue(undefined);
   accepts();
 });
 
@@ -412,9 +418,128 @@ describe('sending', () => {
 
     it('offers a confirm action once there are values to write', async () => {
       await extracted();
+      expect(screen.getByRole('button', { name: 'Confirm and write' })).toBeInTheDocument();
+    });
+  });
+
+  describe('writing to the customer system', () => {
+    async function reviewed() {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+      await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+      return user;
+    }
+
+    /** The period is the customer's uniqueness key; writing without it would be
+     *  refused anyway, and less clearly. */
+    it('will not write without a reporting period', async () => {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+
+      expect(screen.getByRole('button', { name: 'Confirm and write' })).toBeDisabled();
+    });
+
+    it('sends the values on screen, corrections included', async () => {
+      const user = await reviewed();
+      await user.clear(screen.getByLabelText('total_investments value'));
+      await user.type(screen.getByLabelText('total_investments value'), '999');
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      await waitFor(() => expect(mockWrite).toHaveBeenCalledOnce());
+      const [, fundId, period, values] = mockWrite.mock.calls[0];
+      expect(fundId).toBe(FUNDS[0].id);
+      expect(period).toBe('2025-06-30');
+      expect(values.total_investments).toBe('999');
+      // A value the model never found is sent as empty, not omitted — their
+      // schema decides whether a missing required field is acceptable.
+      expect(values.total_receivables).toBe('');
+    });
+
+    it('locks the analysis once the customer has accepted it', async () => {
+      const user = await reviewed();
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      const log = screen.getByRole('log');
+      expect(await within(log).findByText(/Written to the customer's system/)).toBeInTheDocument();
+      expect(screen.getByText(/The customer's database owns these values now/)).toBeInTheDocument();
+      expect(screen.getByLabelText('total_investments value')).toBeDisabled();
       expect(
-        screen.getByRole('button', { name: 'Confirm and write' }),
-      ).toBeEnabled();
+        screen.queryByRole('button', { name: 'Confirm and write' }),
+      ).not.toBeInTheDocument();
+    });
+
+    /**
+     * The whole reason customer-system is a separate service. Their refusal is
+     * theirs to explain, so their wording reaches the analyst unaltered.
+     */
+    it('shows the customer\'s rejection against the fields they named', async () => {
+      const user = await reviewed();
+      mockWrite.mockRejectedValue(
+        new WriteRejected('The report was not stored.', 400, 'ValidationFailed', [
+          { field: 'total_investments', reason: 'Must be a whole number of USD.' },
+        ]),
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      expect(await screen.findByText('Must be a whole number of USD.')).toBeInTheDocument();
+      expect(screen.getByText('The report was not stored.')).toBeInTheDocument();
+      // Still editable — the analyst has to be able to fix what was refused.
+      expect(screen.getByLabelText('total_investments value')).toBeEnabled();
+    });
+
+    it('reports a duplicate report without pretending it succeeded', async () => {
+      const user = await reviewed();
+      mockWrite.mockRejectedValue(
+        new WriteRejected(
+          'A report for calpers ending 2025-06-30 is already on file.',
+          409,
+          'ReportAlreadyExists',
+          [],
+        ),
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      expect(await screen.findByText(/already on file/)).toBeInTheDocument();
+      expect(screen.queryByText(/database owns these values/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Confirm and write' })).toBeEnabled();
+    });
+
+    it('clears a rejection once the analyst changes the value it named', async () => {
+      const user = await reviewed();
+      mockWrite.mockRejectedValue(
+        new WriteRejected('The report was not stored.', 400, 'ValidationFailed', [
+          { field: 'total_investments', reason: 'Must be a whole number of USD.' },
+        ]),
+      );
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+      await screen.findByText('Must be a whole number of USD.');
+
+      await user.type(screen.getByLabelText('total_investments value'), '0');
+
+      // Still complaining about a value they have since fixed would be worse
+      // than not complaining at all.
+      expect(screen.queryByText('Must be a whole number of USD.')).not.toBeInTheDocument();
+    });
+
+    it('surfaces an unreachable customer system as its own failure', async () => {
+      const user = await reviewed();
+      mockWrite.mockRejectedValue(
+        new WriteRejected('The customer system could not be reached.', 502, 'CustomerSystemUnavailable', []),
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      expect(await screen.findByText(/could not be reached/)).toBeInTheDocument();
+      expect(screen.queryByText(/database owns these values/)).not.toBeInTheDocument();
     });
   });
 
