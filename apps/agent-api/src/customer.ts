@@ -10,7 +10,6 @@
 export type Fund = {
   id: string;
   name: string;
-  issuer: string;
 };
 
 export type FieldDefinition = {

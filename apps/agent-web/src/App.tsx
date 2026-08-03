@@ -30,7 +30,7 @@ export default function App() {
     const analysis: Analysis = {
       id: crypto.randomUUID(),
       fundId: fund.id,
-      fundName: `${fund.issuer} — ${fund.name}`,
+      fundName: fund.name,
       createdAt: new Date().toISOString(),
       status: 'draft',
       messages: [message('agent', OPENING_MESSAGE)],

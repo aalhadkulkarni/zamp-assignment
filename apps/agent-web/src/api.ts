@@ -3,7 +3,6 @@ const AGENT_API = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:3001';
 export type Fund = {
   id: string;
   name: string;
-  issuer: string;
 };
 
 /**

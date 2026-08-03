@@ -16,10 +16,10 @@ const mockListFunds = vi.mocked(listFunds);
 
 /** Funds come from the customer's system now, so tests have to stand one in. */
 const FUNDS = [
-  { id: 'calpers-perf-a', name: 'PERF A — Agent Multiple-Employer', issuer: 'CalPERS' },
-  { id: 'calstrs-dbp', name: 'Defined Benefit Program', issuer: 'CalSTRS' },
+  { id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' },
+  { id: 'calstrs', name: 'CalSTRS — California State Teachers’ Retirement System' },
 ];
-const FUND_LABEL = `${FUNDS[0].issuer} — ${FUNDS[0].name}`;
+const FUND_LABEL = FUNDS[0].name;
 
 const AGENT_TEXT = 'Received your two documents. Extraction is next.';
 
@@ -84,7 +84,7 @@ describe('starting an analysis', () => {
     expect(screen.getByRole('button', { name: 'Start analysis' })).toBeEnabled();
   });
 
-  it('lists funds by issuer, since one issuer runs several plans', async () => {
+  it('lists the funds the customer system knows about', async () => {
     const user = userEvent.setup();
     render(<App />);
     await user.click(screen.getByRole('button', { name: 'New analysis' }));

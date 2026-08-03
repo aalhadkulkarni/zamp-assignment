@@ -183,11 +183,19 @@ The domain-agnostic property belongs on our side, not theirs. agent-api knows no
 The browser never calls customer-system directly. It goes through agent-api, because a real integration carries per-customer credentials and those belong server-side for the same reason the Anthropic key does.
 
 
-16 - A fund is a plan, not an issuer.
+16 - A fund is the whole retirement system, not one plan inside it.
 
-The CalPERS statement of fiduciary net position puts six plans side by side as columns on one page - PERF A, PERF B, PERF C, and the Legislators' and two Judges' funds. "Total Investments" isn't one number on that page, it's six.
+CalPERS is one fund. Not CalPERS PERF A, CalPERS PERF B and so on.
 
-So the thing an analyst is assigned, and the thing a row is keyed by, has to be the plan. If the analyst picked "CalPERS" the agent would still be guessing which column to read, and every candidate would look equally plausible. Picking the plan up front removes a whole class of wrong answers before extraction starts.
+I initially modelled it the other way. The CalPERS statement of fiduciary net position puts six plans side by side as columns on one page - PERF A, PERF B, PERF C, and the Legislators' and two Judges' funds - so "Total Investments" is six numbers on that page, not one. Making the analyst pick a plan would settle which column to read before extraction ever ran.
+
+That's the wrong instinct, for two reasons.
+
+It doesn't match the job. An analyst is assigned CalPERS. Nobody is assigned PERF C. And the customer wants figures for CalPERS, because that's the entity they're forming a view about.
+
+More importantly, picking the plan up front doesn't solve the column problem, it hides it. Which column - or which combination of columns - answers "total investments for CalPERS" is a real question about a real document, and it's exactly the kind of thing the agent will get wrong in an interesting way. "You read PERF B's column, I wanted the total across the plans" is a correction with a genuine diagnosis behind it and a scope that reaches every future CalPERS document. Designing that ambiguity out of existence would have removed one of the better demonstrations of the thing this project is actually about.
+
+So the fund list is five systems - CalPERS, CalSTRS, New York State Common, Texas TRS, Florida FRS - and the six-column page stays hard on purpose.
 
 
 17 - Only the totals, stored in whole dollars.

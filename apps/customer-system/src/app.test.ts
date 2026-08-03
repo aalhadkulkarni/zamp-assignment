@@ -8,9 +8,9 @@ import { FIELD_KEYS } from './fields.js';
  */
 let app: Awaited<ReturnType<typeof buildApp>>;
 
-const FUND = 'calpers-perf-a';
+const FUND = 'calpers';
 
-/** Real figures from the CalPERS statement, converted from thousands to whole USD. */
+/** Real PERF A figures from the CalPERS statement, converted from thousands to whole USD. */
 const PERF_A = {
   total_receivables: 38_456_658_000,
   total_investments: 462_090_073_000,
@@ -47,18 +47,18 @@ describe('health', () => {
 });
 
 describe('GET /funds', () => {
-  it('lists plans, not issuers', async () => {
+  it('lists the funds an analyst can be assigned', async () => {
     const res = await app.inject({ method: 'GET', url: '/funds' });
     const funds = res.json();
 
     expect(res.statusCode).toBe(200);
-    // Six CalPERS plans sit side by side as columns on one statement page, which
-    // is why the analyst picks a plan rather than an issuer.
-    expect(funds.filter((f: { issuer: string }) => f.issuer === 'CalPERS')).toHaveLength(6);
-    expect(funds.find((f: { id: string }) => f.id === FUND)).toMatchObject({
-      issuer: 'CalPERS',
-      name: expect.stringContaining('PERF A'),
+    expect(funds).toHaveLength(5);
+    // A fund is the whole system. Which of its plans a figure came from is
+    // extraction's problem, not something the fund list settles in advance.
+    expect(funds.find((f: { id: string }) => f.id === 'calpers')).toMatchObject({
+      name: expect.stringContaining('CalPERS'),
     });
+    expect(funds.every((f: object) => !('issuer' in f))).toBe(true);
   });
 });
 
@@ -122,7 +122,7 @@ describe('POST /funds/:fundId/reports', () => {
 
     it('accepts the same year for a different fund', async () => {
       await post(report());
-      expect((await post(report(), 'calpers-perf-b')).status).toBe(201);
+      expect((await post(report(), 'calstrs')).status).toBe(201);
     });
 
     it('names every missing field at once, not one at a time', async () => {

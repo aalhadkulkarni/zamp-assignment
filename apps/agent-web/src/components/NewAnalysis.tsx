@@ -66,7 +66,7 @@ export default function NewAnalysis({ onStart, onCancel }: Props) {
             <option value="">Select a fund…</option>
             {load.funds.map((fund) => (
               <option key={fund.id} value={fund.id}>
-                {fund.issuer} — {fund.name}
+                {fund.name}
               </option>
             ))}
           </select>

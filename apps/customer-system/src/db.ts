@@ -30,9 +30,8 @@ export function databasePath(): string {
  */
 const SCHEMA = `
   CREATE TABLE IF NOT EXISTS fund (
-    id     TEXT PRIMARY KEY,
-    name   TEXT NOT NULL,
-    issuer TEXT NOT NULL
+    id   TEXT PRIMARY KEY,
+    name TEXT NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS report (
@@ -55,18 +54,20 @@ const SCHEMA = `
 `;
 
 /**
- * The plans on a real CalPERS statement of fiduciary net position, plus CalSTRS
- * so there is more than one issuer to learn about. Six of these sit side by side
- * as columns on one page, which is why a fund is a plan and not an issuer.
+ * Large US public pension systems, each the whole system rather than the plans
+ * inside it. A CalPERS statement puts six plans side by side as columns, so
+ * "Total Investments" is several numbers on one page — working out which one the
+ * schema wants is extraction's problem, not something the fund list should
+ * pre-empt.
+ *
+ * Five is enough variety to learn per-issuer lessons against.
  */
-const SEED_FUNDS: [string, string, string][] = [
-  ['calpers-perf-a', 'PERF A — Agent Multiple-Employer', 'CalPERS'],
-  ['calpers-perf-b', 'PERF B — Schools Cost-Sharing', 'CalPERS'],
-  ['calpers-perf-c', 'PERF C — Public Agency Cost-Sharing', 'CalPERS'],
-  ['calpers-lrf', "Legislators' Retirement Fund", 'CalPERS'],
-  ['calpers-jrf', "Judges' Retirement Fund", 'CalPERS'],
-  ['calpers-jrf-ii', "Judges' Retirement Fund II", 'CalPERS'],
-  ['calstrs-dbp', 'Defined Benefit Program', 'CalSTRS'],
+const SEED_FUNDS: [string, string][] = [
+  ['calpers', 'CalPERS — California Public Employees’ Retirement System'],
+  ['calstrs', 'CalSTRS — California State Teachers’ Retirement System'],
+  ['nyscrf', 'New York State Common Retirement Fund'],
+  ['trs-texas', 'Teacher Retirement System of Texas'],
+  ['florida-sba', 'Florida Retirement System Pension Plan'],
 ];
 
 export function openDatabase(): DatabaseSync {
@@ -78,10 +79,13 @@ export function openDatabase(): DatabaseSync {
   db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
 
+  // DO UPDATE rather than DO NOTHING so a renamed fund propagates to an existing
+  // database. Funds removed from this list would linger; there is no migration
+  // story yet and nothing depends on one.
   const insert = db.prepare(
-    'INSERT INTO fund (id, name, issuer) VALUES (?, ?, ?) ON CONFLICT (id) DO NOTHING',
+    'INSERT INTO fund (id, name) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET name = excluded.name',
   );
-  for (const [id, name, issuer] of SEED_FUNDS) insert.run(id, name, issuer);
+  for (const [id, name] of SEED_FUNDS) insert.run(id, name);
 
   return db;
 }

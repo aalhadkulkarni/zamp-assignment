@@ -20,10 +20,8 @@ export async function buildApp() {
 
   app.get('/health', async () => ({ ok: true, service: 'customer-system' }));
 
-  /** The plans an analyst can be assigned. A fund here is a plan, not an issuer. */
-  app.get('/funds', async () =>
-    db.prepare('SELECT id, name, issuer FROM fund ORDER BY issuer, name').all(),
-  );
+  /** The funds an analyst can be assigned. */
+  app.get('/funds', async () => db.prepare('SELECT id, name FROM fund ORDER BY name').all());
 
   /**
    * The contract. agent-api reads this to know what to extract; it is the only
