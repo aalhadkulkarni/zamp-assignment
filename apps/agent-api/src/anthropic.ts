@@ -127,28 +127,34 @@ export type ExtractionReply = {
  * kind of work worth paying to think about — a wrong number here is far more
  * expensive than the tokens.
  */
+/** PDFs go as document blocks, text files inline. Shared so that extraction and
+ *  diagnosis cannot drift apart in how they present the same pages. */
+function documentBlocks(attachments: Attachment[]) {
+  return attachments.map((file) =>
+    file.extension === '.pdf'
+      ? ({
+          type: 'document' as const,
+          source: {
+            type: 'base64' as const,
+            media_type: 'application/pdf' as const,
+            data: file.bytes.toString('base64'),
+          },
+          title: file.filename,
+        })
+      : ({
+          type: 'text' as const,
+          text: `--- ${file.filename} ---\n${file.bytes.toString('utf8')}`,
+        }),
+  );
+}
+
 export async function extract(
   prompt: string,
   attachments: Attachment[],
   schema: Record<string, unknown>,
 ): Promise<ExtractionReply> {
   const content = [
-    ...attachments.map((file) =>
-      file.extension === '.pdf'
-        ? ({
-            type: 'document' as const,
-            source: {
-              type: 'base64' as const,
-              media_type: 'application/pdf' as const,
-              data: file.bytes.toString('base64'),
-            },
-            title: file.filename,
-          })
-        : ({
-            type: 'text' as const,
-            text: `--- ${file.filename} ---\n${file.bytes.toString('utf8')}`,
-          }),
-    ),
+    ...documentBlocks(attachments),
     // Documents first, instruction last: the model reads in order, and the ask
     // lands better after the material it applies to.
     { type: 'text' as const, text: prompt },
@@ -288,6 +294,7 @@ export type DiagnosisReply = {
  */
 export async function diagnose(
   prompt: string,
+  attachments: Attachment[],
   schema: Record<string, unknown>,
 ): Promise<DiagnosisReply> {
   const response = await client().messages.create({
@@ -295,7 +302,7 @@ export async function diagnose(
     max_tokens: 4096,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'high', format: { type: 'json_schema', schema } },
-    messages: [{ role: 'user', content: prompt }],
+    messages: [{ role: 'user', content: [...documentBlocks(attachments), { type: 'text', text: prompt }] }],
   });
 
   if (response.stop_reason === 'refusal') {
@@ -328,6 +335,7 @@ export async function diagnose(
  */
 export async function diagnoseFixture(
   _prompt: string,
+  _attachments: Attachment[],
   _schema: Record<string, unknown>,
 ): Promise<DiagnosisReply> {
   await sleep(fixtureDelayMs());

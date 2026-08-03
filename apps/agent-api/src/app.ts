@@ -21,6 +21,7 @@ import {
 } from './customer.js';
 import {
   isValidAnalysisId,
+  readUploadedDocuments,
   storeEdits,
   storeUpload,
   validateDocument,
@@ -193,9 +194,19 @@ export async function buildApp() {
       const fundName = funds.find((f) => f.id === fundId)?.name ?? fundId;
       const fieldKeys = [...new Set(edits.map((e) => e.fieldKey))];
 
+      // The pages the analyst was looking at. Without them the model can only
+      // diagnose units errors and slips — the other three lesson types are
+      // about what else was on the page.
+      const pages = await readUploadedDocuments(resolveTenant(request), analysisId);
+
       const run = usingFixtures() ? diagnoseFixture : diagnose;
       const result = await run(
         diagnosisPrompt(fundName, definitions, edits),
+        pages.map((doc) => ({
+          filename: doc.filename,
+          extension: extname(doc.filename).toLowerCase(),
+          bytes: doc.bytes,
+        })),
         diagnosisSchema(fieldKeys) as unknown as Record<string, unknown>,
       );
 

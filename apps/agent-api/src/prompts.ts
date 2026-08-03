@@ -52,10 +52,11 @@ Write the summary in plain prose. No markdown, no asterisks, no bullet points.`;
 /**
  * Asks the model to explain its own corrections.
  *
- * The documents are deliberately not attached. The question is why a value was
- * wrong, and the model already told us what it read and why — handing it the
- * pages again invites it to re-extract rather than examine its own reasoning,
- * and costs the tokens of a second extraction to do so.
+ * The pages are attached. Three of the five lesson types are about what else was
+ * on the page — a value read from the wrong column, a different concept with a
+ * similar label, a label not recognised at all — and none of them can be seen
+ * from the single line the model quoted. The instruction below is what stops it
+ * re-extracting instead of examining its own reasoning.
  *
  * The whole batch goes in one prompt because corrections made together usually
  * share a cause. Asked one at a time the model can only ever find coincidences.
@@ -88,6 +89,8 @@ export function diagnosisPrompt(
     .join('\n\n');
 
   return `You extracted values from a financial report for ${fundName}. An analyst reviewed your work and corrected some of it. Work out why.
+
+The pages you read are attached. You are not extracting again — do not produce values. Use them to check your own reasoning: whether the figure the analyst chose appears somewhere else on the page, in another column or another row; whether a different line carries the label this field really means; whether the units heading says what you assumed it said.
 
 ${corrections}
 

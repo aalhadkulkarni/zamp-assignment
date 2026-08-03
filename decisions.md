@@ -262,13 +262,23 @@ Each event carries a snapshot of the provenance - source text, page, confidence,
 Stored as one file per batch on the server for the same reason it's sent as one: splitting them per field would throw away the only evidence that they share a cause.
 
 
-21 - The diagnosis gets the corrections and their provenance, not the documents.
+21 - The diagnosis gets the corrections, their provenance, and the pages.
 
 The Anthropic API is stateless. There is no session id and no server-side memory, so whatever the model should know has to be in the request. The question is what belongs there.
 
-I send the corrections, the provenance we snapshotted when each was captured - the line it quoted, the page, its own stated reasoning, its confidence - and the customer's field definitions. I do not re-attach the documents.
+I send the corrections, the provenance we snapshotted when each was captured - the line it quoted, the page, its own stated reasoning, its confidence - the customer's field definitions, and the documents themselves.
 
-Why not: the question is why a value was wrong, and the model already told us what it read and why. Handing it the pages again invites it to re-extract and re-derive rather than examine its own reasoning, and costs the tokens of a second extraction to do it. For a units mistake the provenance is more than enough - the ratio between the two values is exactly a thousand and the analyst's figure matches the printed one, which is the whole diagnosis. If wrong-column cases turn out to need the page, attaching it is a few lines and prompt caching would make it cheap.
+I first built this without the documents, on the reasoning that the model had already told us what it read and why, so handing it the pages again would invite re-extraction rather than introspection. That was wrong, and the way it is wrong is worth recording.
+
+Sort the five lesson types by what they need to be diagnosed. A units mistake needs only the two values and the quoted line - the ratio is exactly a thousand and the analyst's figure matches the printed one. A typo needs nothing, it's what's left when nothing else fits. But a value read from the wrong column can only be recognised by seeing the other columns. A concept confusion needs the other labelled lines on the page to compare against. An unrecognised label is, by definition, not in the line the model quoted.
+
+So three of the five are blind without the page, and they're the three that produce the lessons worth having. On a CalPERS statement with six plan columns sharing one set of row labels, wrong-column is the most likely mistake there is, and provenance alone cannot see it.
+
+The re-extraction worry was real but it is a prompt problem, not an architecture one. The prompt now says the pages are attached, that the model is not extracting again, and what to use them for: whether the analyst's figure appears elsewhere on the page, whether another line carries the label this field really means, whether the units heading says what was assumed. I had traded away three lesson types to avoid a risk that one sentence handles.
+
+The cost is a second pass over the same pages, which is real but small next to getting the diagnosis wrong. If it matters later, prompt caching applies directly.
+
+When the pages are gone - which on Render's ephemeral filesystem is routine - the diagnosis still runs without them. Degraded is better than failed, and the two types that survive are still worth proposing.
 
 The lessons come back with a type and a scope, and the scope is the part that matters. Type is interesting; scope is consequential. "This applies to every document from every fund" is a much bigger claim than "this once", and it is what the analyst is really being asked to ratify - so the card states it in full rather than as a one-word tag, and the card is coloured by scope rather than by type.
 

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import {
   ACCEPTED_EXTENSIONS,
@@ -151,4 +151,50 @@ export async function storeEdits(
   );
 
   return batchId;
+}
+
+/**
+ * The documents from the most recent upload for an analysis, read back off disk.
+ *
+ * Needed because a diagnosis has to see the page. Three of the five lesson types
+ * — wrong source, concept confusion, unrecognised label — are about what else
+ * was on that page, and the quoted line by definition does not contain it.
+ *
+ * Returns nothing if the upload directory is gone, which on Render's ephemeral
+ * filesystem is a normal Tuesday. A diagnosis without the page is worse than one
+ * with it, but far better than a failure.
+ */
+export async function readUploadedDocuments(
+  tenantId: string,
+  analysisId: string,
+): Promise<{ filename: string; bytes: Buffer }[]> {
+  const dir = uploadDir(tenantId, analysisId);
+
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+
+  const manifests = entries.filter((name) => name.startsWith('upload-')).sort();
+  const latest = manifests.at(-1);
+  if (!latest) return [];
+
+  const manifest = JSON.parse(await readFile(join(dir, latest), 'utf8')) as {
+    documents: StoredDocument[];
+  };
+
+  const documents = [];
+  for (const doc of manifest.documents) {
+    try {
+      documents.push({
+        filename: doc.filename,
+        bytes: await readFile(join(dir, `${doc.id}-${doc.storedAs}`)),
+      });
+    } catch {
+      // One unreadable file should not cost us the others.
+    }
+  }
+  return documents;
 }

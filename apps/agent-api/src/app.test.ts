@@ -654,19 +654,55 @@ describe('POST /analyses/:analysisId/edits', () => {
       expect(body.diagnosis.lessons[0].id).toMatch(/^[0-9a-f-]{36}$/);
     });
 
-    it('sends the correction and its provenance, but not the documents', async () => {
+    it('sends the correction and the provenance it was captured with', async () => {
       await submit({ fundId: 'calpers', edits: [EDIT] });
 
       const [{ messages }] = create.mock.calls[0];
-      const prompt = messages[0].content;
+      const prompt = messages[0].content.at(-1).text;
 
       expect(prompt).toContain('462090073000');
       expect(prompt).toContain('462090073');
       expect(prompt).toContain('Total Investments $462,090,073');
       expect(prompt).toContain('PERF A column.');
-      // The model already told us its reasoning; re-attaching the pages would
-      // invite it to re-extract rather than examine that reasoning.
-      expect(typeof prompt).toBe('string');
+    });
+
+    /**
+     * Three of the five lesson types are about what else was on the page — a
+     * figure from the wrong column, a similarly-labelled different concept, a
+     * label not recognised at all. None of them is visible in the one line the
+     * model quoted, so the page has to come too.
+     */
+    it('attaches the pages the analyst was reviewing', async () => {
+      await upload([pdf('acfr.pdf', 128)]);
+      create.mockClear();
+      create.mockResolvedValue(DIAGNOSIS_REPLY);
+
+      await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      const [{ messages }] = create.mock.calls[0];
+      const attached = messages[0].content.filter((b: { type: string }) => b.type === 'document');
+      expect(attached).toHaveLength(1);
+      expect(attached[0].title).toBe('acfr.pdf');
+    });
+
+    it('tells the model not to extract again', async () => {
+      await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      const [{ messages }] = create.mock.calls[0];
+      // Without this the attached pages invite a second extraction instead of
+      // an explanation of the first.
+      expect(messages[0].content.at(-1).text).toMatch(/not extracting again/i);
+    });
+
+    /** Render wipes the upload directory on every restart. A diagnosis without
+     *  the page is worse than one with it, and far better than a failure. */
+    it('still diagnoses when the documents are no longer on disk', async () => {
+      const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      expect(status).toBe(201);
+      expect(body.diagnosis.lessons).toHaveLength(1);
+      const [{ messages }] = create.mock.calls[0];
+      expect(messages[0].content.filter((b: { type: string }) => b.type === 'document')).toHaveLength(0);
     });
 
     it('constrains the lessons to fields that were actually corrected', async () => {
