@@ -269,15 +269,20 @@ describe('sending', () => {
    * scaled it correctly. Hiding the multiplier makes the second check
    * impossible without reopening the document.
    */
-  it('shows the printed figure and the multiplier behind a scaled value', async () => {
+  it('shows the printed figure and the units behind a scaled value', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
 
     await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
     await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
 
-    const review = await screen.findByRole('table');
-    expect(within(review).getByText('462,090,073 × 1,000')).toBeInTheDocument();
+    // The analyst checks the figure against the page and the scaling against the
+    // heading. Both have to be on screen, or the second check means reopening
+    // the document.
+    expect(screen.getByLabelText('total_investments figure')).toHaveValue(462090073);
+    expect(screen.getByLabelText('total_investments units')).toHaveValue('1000');
+    expect(screen.getByText('$462,090,073,000')).toBeInTheDocument();
   });
 
   it('marks a value it could not find rather than inventing one', async () => {
@@ -291,6 +296,94 @@ describe('sending', () => {
     const row = within(review).getByText('total_receivables').closest('tr')!;
     expect(within(row).getByText('not found')).toBeInTheDocument();
     expect(within(row).getByText('low')).toBeInTheDocument();
+  });
+
+  describe('correcting a value', () => {
+    async function extracted() {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+      return user;
+    }
+
+    it('lets the analyst correct a misread figure', async () => {
+      const user = await extracted();
+      const figure = screen.getByLabelText('total_investments figure');
+
+      await user.clear(figure);
+      await user.type(figure, '462090074');
+
+      // The scaled value follows the correction, still in whole dollars.
+      expect(await screen.findByText('$462,090,074,000')).toBeInTheDocument();
+    });
+
+    /**
+     * Units are a separate control from the figure because changing them is a
+     * different kind of mistake, and step 10 has to tell the two apart.
+     */
+    it('lets the analyst correct the units without retyping the figure', async () => {
+      const user = await extracted();
+
+      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+
+      expect(await screen.findByText('$462,090,073')).toBeInTheDocument();
+      expect(screen.getByLabelText('total_investments figure')).toHaveValue(462090073);
+    });
+
+    it('lets the analyst fill in a value the model could not find', async () => {
+      const user = await extracted();
+      const figure = screen.getByLabelText('total_receivables figure');
+
+      expect(figure).toHaveValue(null);
+      await user.type(figure, '38456658');
+
+      expect(await screen.findByText('$38,456,658,000')).toBeInTheDocument();
+    });
+
+    it('marks a corrected row and counts the corrections', async () => {
+      const user = await extracted();
+      expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
+
+      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+
+      expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
+      expect(screen.getByText('edited')).toBeInTheDocument();
+    });
+
+    it('puts a corrected value back the way the model had it', async () => {
+      const user = await extracted();
+
+      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      await user.click(screen.getByRole('button', { name: 'revert' }));
+
+      expect(await screen.findByText('$462,090,073,000')).toBeInTheDocument();
+      expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
+      // Reverting removes the correction rather than recording the original as
+      // one — untouched and corrected-back are different facts.
+      expect(screen.queryByText('edited')).not.toBeInTheDocument();
+    });
+
+    it('drops corrections when a new extraction replaces the values', async () => {
+      const user = await extracted();
+      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
+
+      // A second upload is a fresh reading; an old fix no longer refers to
+      // anything, and silently reapplying it would be worse than losing it.
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr-v2.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+
+      expect(await screen.findByText('Nothing changed yet.')).toBeInTheDocument();
+    });
+
+    it('offers a confirm action once there are values to write', async () => {
+      await extracted();
+      expect(
+        screen.getByRole('button', { name: 'Confirm and write' }),
+      ).toBeEnabled();
+    });
   });
 
   it('does not mark a real reply as recorded', async () => {

@@ -1,15 +1,27 @@
 import ChatPanel from './ChatPanel';
 import ReviewTable from './ReviewTable';
 import Composer from './Composer';
-import type { Analysis } from '../types';
+import type { Analysis, FieldEdit } from '../types';
 
 type Props = {
   analysis: Analysis;
   onSend: (text: string, files: File[]) => Promise<boolean>;
+  onEdit: (key: string, edit: FieldEdit) => void;
+  onRevert: (key: string) => void;
+  onConfirm: () => void;
   onBack: () => void;
 };
 
-export default function Workspace({ analysis, onSend, onBack }: Props) {
+export default function Workspace({
+  analysis,
+  onSend,
+  onEdit,
+  onRevert,
+  onConfirm,
+  onBack,
+}: Props) {
+  const editCount = Object.keys(analysis.edits).length;
+
   return (
     <div className="workspace">
       <header className="workspace-header">
@@ -36,7 +48,27 @@ export default function Workspace({ analysis, onSend, onBack }: Props) {
               </p>
             </div>
           ) : (
-            <ReviewTable fields={analysis.fields} />
+            <>
+              <ReviewTable
+                fields={analysis.fields}
+                edits={analysis.edits}
+                onEdit={onEdit}
+                onRevert={onRevert}
+              />
+
+              {/* Sticky, because the table scrolls and the decision to write
+                  should not require scrolling to find. */}
+              <div className="review-actions">
+                <p className="subtle">
+                  {editCount === 0
+                    ? 'Nothing changed yet.'
+                    : `${editCount} value${editCount === 1 ? '' : 's'} corrected.`}
+                </p>
+                <button className="primary" onClick={onConfirm}>
+                  Confirm and write
+                </button>
+              </div>
+            </>
           )}
         </section>
       </div>

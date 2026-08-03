@@ -41,4 +41,15 @@ export type Analysis = {
   messages: ChatMessage[];
   /** Empty until an extraction comes back. Replaced wholesale by the latest one. */
   fields: ReviewField[];
+  /**
+   * Analyst corrections, keyed by field. Kept apart from `fields` rather than
+   * merged into them: what the model said and what the analyst said are both
+   * needed to work out why an edit happened, and merging destroys the first.
+   */
+  edits: Record<string, FieldEdit>;
+};
+
+export type FieldEdit = {
+  valueAsPrinted: number | null;
+  unitsMultiplier: number;
 };

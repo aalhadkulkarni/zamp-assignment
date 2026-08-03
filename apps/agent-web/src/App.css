@@ -240,6 +240,68 @@
   background: var(--danger-bg);
 }
 
+.row-edited {
+  background: var(--accent-bg);
+}
+
+.cell-input {
+  width: 100%;
+  min-width: 96px;
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 6px 8px;
+}
+
+/* Wide enough for "as printed" plus the dropdown arrow — the labels were
+   truncating to "as printe" and "thousand:", which is worse than useless on a
+   control whose whole job is telling you the scale. */
+select.cell-input {
+  min-width: 128px;
+  padding-right: 4px;
+}
+
+/* Number spinners are useless on a nine-digit figure and steal width. */
+.cell-input[type='number']::-webkit-inner-spin-button,
+.cell-input[type='number']::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.cell-input[type='number'] {
+  appearance: textfield;
+  text-align: right;
+}
+
+.edited-tag {
+  color: var(--accent);
+}
+
+.revert {
+  display: block;
+  margin-top: 4px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--accent);
+}
+
+.reasoning {
+  display: block;
+  margin-top: 4px;
+}
+
+.review-actions {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 12px;
+  margin-top: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
 /* ---------- Chat ---------- */
 
 .chat-log {

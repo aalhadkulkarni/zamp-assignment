@@ -3,7 +3,7 @@ import { ApiError, uploadDocuments, type Fund } from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
-import type { Analysis, ChatMessage } from './types';
+import type { Analysis, ChatMessage, FieldEdit } from './types';
 import './App.css';
 
 /**
@@ -35,6 +35,7 @@ export default function App() {
       status: 'draft',
       messages: [message('agent', OPENING_MESSAGE)],
       fields: [],
+      edits: {},
     };
 
     setAnalyses((current) => [analysis, ...current]);
@@ -42,8 +43,34 @@ export default function App() {
   }
 
   function setFields(analysisId: string, fields: Analysis['fields']) {
+    // A new extraction is a fresh reading of the documents, so previous
+    // corrections no longer refer to anything. Keeping them would silently
+    // apply an old fix to a new value.
     setAnalyses((current) =>
-      current.map((a) => (a.id === analysisId ? { ...a, fields } : a)),
+      current.map((a) => (a.id === analysisId ? { ...a, fields, edits: {} } : a)),
+    );
+  }
+
+  function editField(analysisId: string, key: string, edit: FieldEdit) {
+    setAnalyses((current) =>
+      current.map((a) =>
+        a.id === analysisId ? { ...a, edits: { ...a.edits, [key]: edit } } : a,
+      ),
+    );
+  }
+
+  /** Drops the correction entirely rather than writing the model's value back
+   *  as an edit — an untouched field and a field corrected to its original
+   *  value are different things, and step 10 has to tell them apart. */
+  function revertField(analysisId: string, key: string) {
+    setAnalyses((current) =>
+      current.map((a) => {
+        if (a.id !== analysisId) return a;
+        const remaining = Object.fromEntries(
+          Object.entries(a.edits).filter(([edited]) => edited !== key),
+        );
+        return { ...a, edits: remaining };
+      }),
     );
   }
 
@@ -114,6 +141,10 @@ export default function App() {
         <Workspace
           analysis={analysis}
           onSend={(text, files) => send(analysis, text, files)}
+          onEdit={(key, edit) => editField(analysis.id, key, edit)}
+          onRevert={(key) => revertField(analysis.id, key)}
+          // Slice 8 turns this into the POST to customer-system.
+          onConfirm={() => {}}
           onBack={() => setView({ name: 'list' })}
         />
       );
