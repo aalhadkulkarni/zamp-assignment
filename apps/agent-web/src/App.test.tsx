@@ -280,9 +280,11 @@ describe('sending', () => {
     // The analyst checks the figure against the page and the scaling against the
     // heading. Both have to be on screen, or the second check means reopening
     // the document.
-    expect(screen.getByLabelText('total_investments figure')).toHaveValue(462090073);
-    expect(screen.getByLabelText('total_investments units')).toHaveValue('1000');
+    // The value is editable and in whole dollars; the printed figure and the
+    // scaling stay visible as provenance so the analyst can check both.
+    expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073000');
     expect(screen.getByText('$462,090,073,000')).toBeInTheDocument();
+    expect(screen.getByText('printed 462,090,073 × 1,000')).toBeInTheDocument();
   });
 
   it('marks a value it could not find rather than inventing one', async () => {
@@ -308,36 +310,36 @@ describe('sending', () => {
       return user;
     }
 
-    it('lets the analyst correct a misread figure', async () => {
+    it('lets the analyst correct a value, showing the readable form as they go', async () => {
       const user = await extracted();
-      const figure = screen.getByLabelText('total_investments figure');
+      const value = screen.getByLabelText('total_investments value');
 
-      await user.clear(figure);
-      await user.type(figure, '462090074');
+      await user.clear(value);
+      await user.type(value, '462090074000');
 
-      // The scaled value follows the correction, still in whole dollars.
       expect(await screen.findByText('$462,090,074,000')).toBeInTheDocument();
     });
 
     /**
-     * Units are a separate control from the figure because changing them is a
-     * different kind of mistake, and step 10 has to tell the two apart.
+     * A field is not necessarily money — the customer's schema decides that. The
+     * control must not silently mangle something it does not understand.
      */
-    it('lets the analyst correct the units without retyping the figure', async () => {
+    it('accepts a value that is not a number and shows it back unchanged', async () => {
       const user = await extracted();
+      const value = screen.getByLabelText('total_investments value');
 
-      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      await user.clear(value);
+      await user.type(value, 'see note 7');
 
-      expect(await screen.findByText('$462,090,073')).toBeInTheDocument();
-      expect(screen.getByLabelText('total_investments figure')).toHaveValue(462090073);
+      expect(await screen.findAllByText('see note 7')).not.toHaveLength(0);
     });
 
     it('lets the analyst fill in a value the model could not find', async () => {
       const user = await extracted();
-      const figure = screen.getByLabelText('total_receivables figure');
+      const value = screen.getByLabelText('total_receivables value');
 
-      expect(figure).toHaveValue(null);
-      await user.type(figure, '38456658');
+      expect(value).toHaveValue('');
+      await user.type(value, '38456658000');
 
       expect(await screen.findByText('$38,456,658,000')).toBeInTheDocument();
     });
@@ -346,7 +348,7 @@ describe('sending', () => {
       const user = await extracted();
       expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
 
-      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      await user.type(screen.getByLabelText('total_investments value'), '0');
 
       expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
       expect(screen.getByText('edited')).toBeInTheDocument();
@@ -355,10 +357,10 @@ describe('sending', () => {
     it('puts a corrected value back the way the model had it', async () => {
       const user = await extracted();
 
-      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      await user.type(screen.getByLabelText('total_investments value'), '0');
       await user.click(screen.getByRole('button', { name: 'revert' }));
 
-      expect(await screen.findByText('$462,090,073,000')).toBeInTheDocument();
+      expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073000');
       expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
       // Reverting removes the correction rather than recording the original as
       // one — untouched and corrected-back are different facts.
@@ -367,7 +369,7 @@ describe('sending', () => {
 
     it('drops corrections when a new extraction replaces the values', async () => {
       const user = await extracted();
-      await user.selectOptions(screen.getByLabelText('total_investments units'), '1');
+      await user.type(screen.getByLabelText('total_investments value'), '0');
       expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
 
       // A second upload is a fresh reading; an old fix no longer refers to

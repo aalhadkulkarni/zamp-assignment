@@ -42,14 +42,17 @@ export type Analysis = {
   /** Empty until an extraction comes back. Replaced wholesale by the latest one. */
   fields: ReviewField[];
   /**
-   * Analyst corrections, keyed by field. Kept apart from `fields` rather than
-   * merged into them: what the model said and what the analyst said are both
-   * needed to work out why an edit happened, and merging destroys the first.
+   * Analyst corrections, keyed by field, held as the raw text they typed.
+   *
+   * Text rather than a parsed value because a field is not necessarily money —
+   * the customer's schema decides that, and a control that assumes a number
+   * breaks the day one of these is a date or a flag. Coercion happens against
+   * the field definition on the way out, and the customer's API is the
+   * authority on whether it was right.
+   *
+   * Kept apart from `fields` rather than merged into them: what the model said
+   * and what the analyst said are both needed to work out why an edit happened,
+   * and merging destroys the first.
    */
-  edits: Record<string, FieldEdit>;
-};
-
-export type FieldEdit = {
-  valueAsPrinted: number | null;
-  unitsMultiplier: number;
+  edits: Record<string, string>;
 };

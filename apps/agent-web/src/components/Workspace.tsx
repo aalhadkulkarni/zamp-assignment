@@ -1,12 +1,12 @@
 import ChatPanel from './ChatPanel';
 import ReviewTable from './ReviewTable';
 import Composer from './Composer';
-import type { Analysis, FieldEdit } from '../types';
+import type { Analysis } from '../types';
 
 type Props = {
   analysis: Analysis;
   onSend: (text: string, files: File[]) => Promise<boolean>;
-  onEdit: (key: string, edit: FieldEdit) => void;
+  onEdit: (key: string, value: string) => void;
   onRevert: (key: string) => void;
   onConfirm: () => void;
   onBack: () => void;

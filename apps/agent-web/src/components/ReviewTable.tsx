@@ -1,30 +1,35 @@
 import type { ReviewField } from '../api';
-import type { FieldEdit } from '../types';
 
 type Props = {
   fields: ReviewField[];
-  edits: Record<string, FieldEdit>;
-  onEdit: (key: string, edit: FieldEdit) => void;
+  edits: Record<string, string>;
+  onEdit: (key: string, value: string) => void;
   onRevert: (key: string) => void;
 };
 
-/** What the document says its figures are in. Covers every ACFR I have seen. */
-const MULTIPLIERS = [
-  { value: 1, label: 'as printed' },
-  { value: 1000, label: 'thousands' },
-  { value: 1_000_000, label: 'millions' },
-];
-
 /**
- * Whole dollars, grouped, no decimals. These are billions — cents are noise, and
- * an abbreviated "$462.1B" would hide the digit an analyst is checking against
- * the document.
+ * The readable form of whatever the analyst typed. Money gets grouped digits;
+ * anything that is not a number is shown back unchanged, because the customer's
+ * schema decides what a field holds and this table does not get to assume.
+ *
+ * Grouped rather than abbreviated: "$462.1B" would hide the digit an analyst is
+ * checking against the page.
  */
-function formatUsd(value: number): string {
-  return value.toLocaleString('en-US', {
+function readable(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === '') return null;
+
+  const asNumber = Number(trimmed);
+  if (!Number.isFinite(asNumber)) return trimmed;
+
+  // minimumFractionDigits has to be set: currency defaults it to 2, which
+  // renders whole dollars as "$462,090,073,000.00". Cents are noise on a figure
+  // this size, but a genuinely fractional value must still show them.
+  return asNumber.toLocaleString('en-US', {
     style: 'currency',
     currency: 'USD',
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   });
 }
 
@@ -34,32 +39,21 @@ export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) 
       <thead>
         <tr>
           <th>Field</th>
-          <th>Figure</th>
-          <th>Units</th>
-          <th className="numeric">Value</th>
+          <th>Value</th>
           <th>Source</th>
         </tr>
       </thead>
       <tbody>
         {fields.map((field) => {
-          // The analyst's version if they have touched it, the model's otherwise.
-          const current = edits[field.key] ?? {
-            valueAsPrinted: field.valueAsPrinted,
-            unitsMultiplier: field.unitsMultiplier,
-          };
+          const original = field.value === null ? '' : String(field.value);
+          const current = field.key in edits ? edits[field.key] : original;
           const edited = field.key in edits;
-          const value =
-            current.valueAsPrinted === null
-              ? null
-              : Math.round(current.valueAsPrinted * current.unitsMultiplier);
+          const shown = readable(current);
 
           return (
             <tr
               key={field.key}
-              className={[
-                value === null ? 'row-blank' : '',
-                edited ? 'row-edited' : '',
-              ]
+              className={[shown === null ? 'row-blank' : '', edited ? 'row-edited' : '']
                 .filter(Boolean)
                 .join(' ')}
             >
@@ -76,45 +70,28 @@ export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) 
 
               <td>
                 <input
-                  type="number"
+                  type="text"
+                  inputMode="decimal"
                   className="cell-input"
-                  aria-label={`${field.key} figure`}
-                  value={current.valueAsPrinted ?? ''}
+                  aria-label={`${field.key} value`}
+                  value={current}
                   placeholder="not found"
-                  onChange={(e) =>
-                    onEdit(field.key, {
-                      ...current,
-                      valueAsPrinted: e.target.value === '' ? null : Number(e.target.value),
-                    })
-                  }
+                  onChange={(e) => onEdit(field.key, e.target.value)}
                 />
-              </td>
 
-              <td>
-                {/* Separate from the figure on purpose: changing this is a units
-                    correction, and that is a different lesson from a mis-read. */}
-                <select
-                  className="cell-input"
-                  aria-label={`${field.key} units`}
-                  value={current.unitsMultiplier}
-                  onChange={(e) =>
-                    onEdit(field.key, { ...current, unitsMultiplier: Number(e.target.value) })
-                  }
-                >
-                  {MULTIPLIERS.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </td>
+                <span className="readable">{shown ?? 'not found'}</span>
 
-              <td className="numeric">
-                {value === null ? (
-                  <span className="subtle">not found</span>
-                ) : (
-                  <span className="value">{formatUsd(value)}</span>
+                {/* Read-only provenance, not a control. The analyst checks the
+                    printed figure against the page and the scaling against the
+                    heading without reopening the document. */}
+                {field.unitsMultiplier !== 1 && field.valueAsPrinted !== null && (
+                  // One string, not interpolated fragments — JSX whitespace
+                  // would otherwise split it across text nodes.
+                  <span className="units subtle">
+                    {`printed ${field.valueAsPrinted.toLocaleString('en-US')} × ${field.unitsMultiplier.toLocaleString('en-US')}`}
+                  </span>
                 )}
+
                 {edited && (
                   <button className="link revert" onClick={() => onRevert(field.key)}>
                     revert

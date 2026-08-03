@@ -244,32 +244,23 @@
   background: var(--accent-bg);
 }
 
+/* The raw value the analyst types; the grouped form sits under it. Left-aligned
+   rather than right, because it may not be a number — the customer's schema
+   decides that, not this table. */
 .cell-input {
   width: 100%;
-  min-width: 96px;
+  min-width: 180px;
   font-family: var(--mono);
   font-size: 13px;
   padding: 6px 8px;
 }
 
-/* Wide enough for "as printed" plus the dropdown arrow — the labels were
-   truncating to "as printe" and "thousand:", which is worse than useless on a
-   control whose whole job is telling you the scale. */
-select.cell-input {
-  min-width: 128px;
-  padding-right: 4px;
-}
-
-/* Number spinners are useless on a nine-digit figure and steal width. */
-.cell-input[type='number']::-webkit-inner-spin-button,
-.cell-input[type='number']::-webkit-outer-spin-button {
-  appearance: none;
-  margin: 0;
-}
-
-.cell-input[type='number'] {
-  appearance: textfield;
-  text-align: right;
+.readable {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text-h);
 }
 
 .edited-tag {
@@ -278,8 +269,7 @@ select.cell-input {
 
 .revert {
   display: block;
-  margin-top: 4px;
-  margin-left: auto;
+  margin-top: 6px;
   font-size: 12px;
   color: var(--accent);
 }

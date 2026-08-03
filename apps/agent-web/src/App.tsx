@@ -3,7 +3,7 @@ import { ApiError, uploadDocuments, type Fund } from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
-import type { Analysis, ChatMessage, FieldEdit } from './types';
+import type { Analysis, ChatMessage } from './types';
 import './App.css';
 
 /**
@@ -51,10 +51,10 @@ export default function App() {
     );
   }
 
-  function editField(analysisId: string, key: string, edit: FieldEdit) {
+  function editField(analysisId: string, key: string, value: string) {
     setAnalyses((current) =>
       current.map((a) =>
-        a.id === analysisId ? { ...a, edits: { ...a.edits, [key]: edit } } : a,
+        a.id === analysisId ? { ...a, edits: { ...a.edits, [key]: value } } : a,
       ),
     );
   }
@@ -141,7 +141,7 @@ export default function App() {
         <Workspace
           analysis={analysis}
           onSend={(text, files) => send(analysis, text, files)}
-          onEdit={(key, edit) => editField(analysis.id, key, edit)}
+          onEdit={(key, value) => editField(analysis.id, key, value)}
           onRevert={(key) => revertField(analysis.id, key)}
           // Slice 8 turns this into the POST to customer-system.
           onConfirm={() => {}}
