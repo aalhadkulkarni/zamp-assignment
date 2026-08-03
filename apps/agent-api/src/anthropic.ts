@@ -39,14 +39,6 @@ function client(): Anthropic {
   return cached;
 }
 
-export type Reply = {
-  model: string;
-  text: string;
-  usage: { inputTokens: number; outputTokens: number };
-  /** True when this came from a recording rather than the API. */
-  fixture: boolean;
-};
-
 /**
  * Fixture mode returns a recorded reply instead of calling the API, so that
  * development and the test suite cost nothing. Off unless asked for — a
@@ -110,44 +102,6 @@ function upstreamMessage(error: Error): string {
   return body?.error?.message ?? error.message;
 }
 
-/**
- * One prompt, one answer, no documents and no tools. This exists to prove the
- * integration works end to end before anything depends on it.
- *
- * Thinking is off and effort is low deliberately: this is a connectivity check,
- * and paying for reasoning on "say hello" proves nothing extra. Extraction in
- * step 7 will want the opposite settings.
- */
-export async function ask(prompt: string): Promise<Reply> {
-  const response = await client().messages.create({
-    model: model(),
-    max_tokens: 256,
-    thinking: { type: 'disabled' },
-    output_config: { effort: 'low' },
-    messages: [{ role: 'user', content: prompt }],
-  });
-
-  if (response.stop_reason === 'refusal') {
-    throw new RefusedError(response.stop_details?.category ?? null);
-  }
-
-  const text = response.content
-    .filter((block) => block.type === 'text')
-    .map((block) => block.text)
-    .join('')
-    .trim();
-
-  return {
-    model: response.model,
-    text,
-    usage: {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-    },
-    fixture: false,
-  };
-}
-
 /** A document on its way to the model. PDFs go as documents, text as text. */
 export type Attachment = {
   filename: string;
@@ -167,9 +121,10 @@ export type ExtractionReply = {
  * Extraction, with the documents attached and the answer constrained to the
  * customer's field list.
  *
- * Adaptive thinking here, unlike the acknowledgement call: reading the right
- * figure out of a table with six columns and a units heading three inches away
- * is exactly the kind of work worth paying to think about.
+ * Adaptive thinking, and effort high. Reading the right figure out of a table
+ * with six plan columns and a units heading three inches away is exactly the
+ * kind of work worth paying to think about — a wrong number here is far more
+ * expensive than the tokens.
  */
 export async function extract(
   prompt: string,
@@ -232,15 +187,6 @@ export async function extract(
 }
 
 /**
- * Same signature as `ask`, no network call. The text below is a real reply
- * recorded from claude-opus-5 on 2026-08-03, not something invented — a made-up
- * fixture drifts from what the model actually says, and then the UI is tuned
- * against prose the model never produces.
- *
- * The prompt is accepted and ignored. Keeping the signature identical is what
- * lets the route pick between the two without knowing which it has.
- */
-/**
  * A recorded extraction, shaped exactly like a real one. The figures are the
  * real CalPERS PERF A column, printed in thousands as the document prints them,
  * so the units arithmetic downstream is exercised rather than bypassed.
@@ -249,6 +195,9 @@ export async function extract(
  * succeeds hides the null rendering, the confidence rendering, and the
  * "what do I do about a blank" question — which is most of what the review table
  * exists to handle.
+ *
+ * Arguments are accepted and ignored. An identical signature to `extract` is
+ * what lets the route pick between the two without knowing which it got.
  */
 export async function extractFixture(
   _prompt: string,
@@ -318,18 +267,5 @@ export async function extractFixture(
         },
       ],
     },
-  };
-}
-
-export async function askFixture(_prompt: string): Promise<Reply> {
-  await sleep(fixtureDelayMs());
-
-  return {
-    model: 'claude-opus-5',
-    text:
-      "Received your documents. I haven't opened or read them yet — extraction " +
-      "is the next step, and I'll follow up once that's in place.",
-    usage: { inputTokens: 236, outputTokens: 70 },
-    fixture: true,
   };
 }
