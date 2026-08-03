@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import Anthropic from '@anthropic-ai/sdk';
 
 /**
@@ -53,6 +54,18 @@ export type Reply = {
  */
 export function usingFixtures(): boolean {
   return process.env.USE_FIXTURES === 'true';
+}
+
+/**
+ * A recorded reply returns instantly, which is the one way fixture mode lies
+ * about the real thing. Loading states never appear, so they never get built or
+ * noticed until a real call puts them on screen for several seconds.
+ *
+ * Overridable so the test suite does not pay the delay on every run.
+ */
+export function fixtureDelayMs(): number {
+  const configured = Number(process.env.FIXTURE_DELAY_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 1000;
 }
 
 export type ModelFailure = { code: string; message: string };
@@ -144,6 +157,8 @@ export async function ask(prompt: string): Promise<Reply> {
  * lets the route pick between the two without knowing which it has.
  */
 export async function askFixture(_prompt: string): Promise<Reply> {
+  await sleep(fixtureDelayMs());
+
   return {
     model: 'claude-opus-5',
     text:

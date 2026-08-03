@@ -51,6 +51,42 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.ANTHROPIC_MODEL;
+  delete process.env.FIXTURE_DELAY_MS;
+});
+
+describe('fixtureDelayMs', () => {
+  it('pauses for a second unless told otherwise', async () => {
+    const { fixtureDelayMs } = await import('./anthropic.js');
+    expect(fixtureDelayMs()).toBe(1000);
+
+    process.env.FIXTURE_DELAY_MS = '0';
+    expect(fixtureDelayMs()).toBe(0);
+
+    // A junk value falls back rather than turning into NaN and never resolving.
+    process.env.FIXTURE_DELAY_MS = 'soon';
+    expect(fixtureDelayMs()).toBe(1000);
+  });
+});
+
+describe('askFixture', () => {
+  it('returns the recording without touching the SDK', async () => {
+    process.env.FIXTURE_DELAY_MS = '0';
+    const { askFixture } = await import('./anthropic.js');
+
+    const reply = await askFixture('ignored');
+    expect(reply.fixture).toBe(true);
+    expect(reply.text).toMatch(/extraction is the next step/i);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('waits before answering, so loading states are visible', async () => {
+    process.env.FIXTURE_DELAY_MS = '80';
+    const { askFixture } = await import('./anthropic.js');
+
+    const started = Date.now();
+    await askFixture('ignored');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(70);
+  });
 });
 
 describe('model', () => {

@@ -66,6 +66,9 @@ afterAll(async () => {
 beforeEach(() => {
   create.mockReset();
   delete process.env.USE_FIXTURES;
+  // The fixture's delay simulates a real call for the UI's benefit. Paying it
+  // on every assertion would just make the suite slower.
+  process.env.FIXTURE_DELAY_MS = '0';
   process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
   create.mockResolvedValue({
     model: 'claude-opus-5',
