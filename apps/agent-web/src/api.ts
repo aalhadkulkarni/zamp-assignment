@@ -34,9 +34,24 @@ export type UploadedDocument = {
   size: number;
 };
 
+/** One row of the review table: the model's answer plus the units arithmetic. */
+export type ReviewField = {
+  key: string;
+  /** Whole USD — valueAsPrinted x unitsMultiplier, computed on the server. */
+  value: number | null;
+  valueAsPrinted: number | null;
+  unitsMultiplier: number;
+  confidence: 'high' | 'medium' | 'low';
+  sourcePage: number | null;
+  sourceText: string;
+  reasoning: string;
+};
+
 export type ModelReply = {
   model: string;
-  text: string;
+  /** Prose for the chat panel, written by the same pass that produced the fields. */
+  summary: string;
+  fields: ReviewField[];
   usage: { inputTokens: number; outputTokens: number };
   /** True when the server answered from a recording instead of calling the model. */
   fixture: boolean;
@@ -78,11 +93,13 @@ export class ApiError extends Error {
 
 export async function uploadDocuments(
   analysisId: string,
+  fundId: string,
   files: File[],
   prompt: string,
 ): Promise<UploadResult> {
   const form = new FormData();
   form.set('prompt', prompt);
+  form.set('fundId', fundId);
   for (const file of files) form.append('documents', file, file.name);
 
   let response: Response;

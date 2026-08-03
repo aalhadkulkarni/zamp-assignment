@@ -1,3 +1,5 @@
+import type { ReviewField } from './api';
+
 export type Fund = {
   id: string;
   name: string;
@@ -37,4 +39,6 @@ export type Analysis = {
    */
   status: 'draft' | 'approved';
   messages: ChatMessage[];
+  /** Empty until an extraction comes back. Replaced wholesale by the latest one. */
+  fields: ReviewField[];
 };

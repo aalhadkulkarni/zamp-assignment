@@ -200,5 +200,31 @@ That's tempting and wrong. It doesn't match the job - an analyst is assigned Cal
 Removing that would have removed one of the better demonstrations of the whole idea. So the fund list is five retirement systems and the six-column page stays hard on purpose.
 
 
+17 - Structured outputs, not a tool.
+
+The model has to return both prose for the chat panel and structured values for the table. My first instinct was a fill_fields tool that Claude calls with the values as arguments.
+
+That's a tool we would never execute - borrowing the mechanism purely to force a JSON shape, and inheriting a tool-use loop we don't want. It also can't give us both halves reliably. Leave tool_choice on auto and the model may answer in prose and never call the tool, so there's no table. Force the tool and it tends to skip the prose, so there's no chat message. Either way one half goes missing, and which half is not up to us.
+
+Structured outputs constrain the whole response to a JSON schema, which means there is no room for loose prose beside it - so the summary becomes a required field of the object. That turns the constraint into the answer: the model cannot return the values without also writing the sentence, because both are required properties of one result.
+
+It's better than a workaround. The summary is produced by the same pass that produced the fields, so when it says "total receivables was only shown as a breakdown, so I left it blank", that is the same reasoning that put the null in the table - not a narration written separately about it. Split across a tool boundary, the two can drift.
+
+The field keys are an enum built from the customer's own /field-definitions response. The model cannot name a field that doesn't exist, which removes an entire class of rejection before it can reach customer-system.
+
+
+18 - The model reports the units. We do the multiplication.
+
+Each extracted field comes back as valueAsPrinted and unitsMultiplier, separately, and agent-api multiplies them.
+
+The obvious alternative is asking for the final number. I don't want that. The CalPERS page is headed "Dollars in Thousands" once, far from the figures it governs; asking the model to return 462,090,073,000 buries that judgement inside a number nobody can check. Multiplying by a thousand in its head is precisely where a units error becomes invisible.
+
+Split, three things get better. The arithmetic is deterministic - we do it, so it cannot be wrong. The judgement is one inspectable field, and the table shows both the printed figure and the multiplier so an analyst can check the number against the page and the scaling against the heading, without opening the document.
+
+And a units correction becomes a clean lesson. "The multiplier was wrong" is a specific, storable diagnosis with an obvious scope. "The value was wrong" leaves us inferring the factor from the difference, which is guesswork dressed up as learning.
+
+Related: a value that isn't there comes back as null, never zero. Zero is a real figure on a financial statement - an em-dash in a column means nil and is worth recording as such. Conflating "not present" with "nil" corrupts an aggregate quietly, which is the worst way to corrupt one.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

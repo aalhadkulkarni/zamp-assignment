@@ -1,4 +1,5 @@
 import ChatPanel from './ChatPanel';
+import ReviewTable from './ReviewTable';
 import Composer from './Composer';
 import type { Analysis } from '../types';
 
@@ -26,13 +27,17 @@ export default function Workspace({ analysis, onSend, onBack }: Props) {
         </section>
 
         <section className="review" aria-label="Extracted values">
-          <div className="empty">
-            <p>No values yet.</p>
-            <p className="subtle">
-              Extracted values will appear here for review, with the source page and
-              reasoning behind each one.
-            </p>
-          </div>
+          {analysis.fields.length === 0 ? (
+            <div className="empty">
+              <p>No values yet.</p>
+              <p className="subtle">
+                Extracted values will appear here for review, with the source page and
+                reasoning behind each one.
+              </p>
+            </div>
+          ) : (
+            <ReviewTable fields={analysis.fields} />
+          )}
         </section>
       </div>
     </div>

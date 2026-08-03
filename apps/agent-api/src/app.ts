@@ -1,17 +1,27 @@
+import { extname } from 'node:path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import {
-  ask,
-  askFixture,
   describeFailure,
+  extract,
+  extractFixture,
   usingFixtures,
   type ModelFailure,
-  type Reply,
 } from './anthropic.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
-import { CustomerSystemError, listFunds } from './customer.js';
-import { acknowledgementPrompt } from './prompts.js';
+import { CustomerSystemError, listFieldDefinitions, listFunds } from './customer.js';
+import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
+import { extractionPrompt } from './prompts.js';
+
+/** What the analyst gets back: prose for the chat, rows for the table. */
+type ExtractionResult = {
+  model: string;
+  summary: string;
+  fields: ReviewField[];
+  usage: { inputTokens: number; outputTokens: number };
+  fixture: boolean;
+};
 import {
   isValidAnalysisId,
   storeUpload,
@@ -70,6 +80,8 @@ export async function buildApp() {
 
       const documents: IncomingDocument[] = [];
       let prompt = '';
+      let fundId = '';
+      let fundName = '';
 
       try {
         for await (const part of request.parts()) {
@@ -77,6 +89,8 @@ export async function buildApp() {
             documents.push({ filename: part.filename, bytes: await part.toBuffer() });
           } else if (part.fieldname === 'prompt') {
             prompt = String(part.value);
+          } else if (part.fieldname === 'fundId') {
+            fundId = String(part.value);
           }
         }
       } catch (error) {
@@ -100,6 +114,17 @@ export async function buildApp() {
         return reply.code(400).send({
           error: 'NoDocuments',
           message: 'At least one document is required.',
+        });
+      }
+
+      // Which fund this is for decides nothing about storage, but everything
+      // about extraction — and eventually which record gets written. Checked
+      // here because it costs nothing; whether the fund actually exists is the
+      // customer's ruling, made when we try to write.
+      if (!fundId) {
+        return reply.code(400).send({
+          error: 'MissingFund',
+          message: 'fundId is required.',
         });
       }
 
@@ -129,24 +154,51 @@ export async function buildApp() {
 
       // The documents are on disk by this point, so a model failure must not be
       // reported as a failed upload — the analyst would re-send files we already
-      // have. The upload is a 200 either way; the model's answer is a separate
-      // field that may be missing, with the reason alongside it.
-      let agent: Reply | null = null;
+      // have. The upload is a 200 either way; extraction is a separate field
+      // that may be missing, with the reason alongside it.
+      let agent: ExtractionResult | null = null;
       let agentError: ModelFailure | null = null;
+
       // Chosen per request rather than at startup, so a test can flip the flag
       // without rebuilding the app.
-      const respond = usingFixtures() ? askFixture : ask;
+      const run = usingFixtures() ? extractFixture : extract;
       try {
-        agent = await respond(acknowledgementPrompt(stored.map((d) => d.filename), prompt));
+        // The field list comes from the customer, not from us and not from the
+        // browser. It is their contract, and a client that could choose it could
+        // choose what ends up in their database. The fund's name is theirs too —
+        // the browser sends an id, never a label we then repeat back as fact.
+        const [definitions, funds] = await Promise.all([listFieldDefinitions(), listFunds()]);
+        fundName = funds.find((f) => f.id === fundId)?.name ?? fundId;
+        const reply_ = await run(
+          extractionPrompt(fundName, definitions, prompt),
+          documents.map((doc) => ({
+            filename: doc.filename,
+            extension: extname(doc.filename).toLowerCase(),
+            bytes: doc.bytes,
+          })),
+          extractionSchema(definitions) as unknown as Record<string, unknown>,
+        );
+
+        agent = {
+          model: reply_.model,
+          summary: reply_.extraction.summary,
+          // The multiplication happens here, not in the model. See applyUnits.
+          fields: reply_.extraction.fields.map(applyUnits),
+          usage: reply_.usage,
+          fixture: reply_.fixture,
+        };
       } catch (error) {
-        agentError = describeFailure(error);
+        agentError =
+          error instanceof CustomerSystemError
+            ? { code: 'CustomerSystemUnavailable', message: error.message }
+            : describeFailure(error);
         if (!agentError) throw error;
-        request.log.warn({ err: error }, 'model call failed after storing documents');
+        request.log.warn({ err: error }, 'extraction failed after storing documents');
       }
 
       return reply
         .code(200)
-        .send({ uploadId, analysisId, prompt, documents: stored, agent, agentError });
+        .send({ uploadId, analysisId, fundId, prompt, documents: stored, agent, agentError });
     },
   );
 

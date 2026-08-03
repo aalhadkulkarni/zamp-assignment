@@ -34,10 +34,17 @@ export default function App() {
       createdAt: new Date().toISOString(),
       status: 'draft',
       messages: [message('agent', OPENING_MESSAGE)],
+      fields: [],
     };
 
     setAnalyses((current) => [analysis, ...current]);
     setView({ name: 'analysis', id: analysis.id });
+  }
+
+  function setFields(analysisId: string, fields: Analysis['fields']) {
+    setAnalyses((current) =>
+      current.map((a) => (a.id === analysisId ? { ...a, fields } : a)),
+    );
   }
 
   function append(analysisId: string, added: ChatMessage[]) {
@@ -53,9 +60,14 @@ export default function App() {
    * only new message is the error, and the composer keeps the documents, so
    * retrying does not leave a half-sent message behind.
    */
-  async function send(analysisId: string, text: string, files: File[]): Promise<boolean> {
+  async function send(
+    analysis: Analysis,
+    text: string,
+    files: File[],
+  ): Promise<boolean> {
+    const analysisId = analysis.id;
     try {
-      const result = await uploadDocuments(analysisId, files, text);
+      const result = await uploadDocuments(analysisId, analysis.fundId, files, text);
       const analystMessage: ChatMessage = {
         ...message('analyst', text),
         attachments: files.map((f) => ({ name: f.name, size: f.size })),
@@ -64,7 +76,7 @@ export default function App() {
       // The documents are stored whether or not the model answered, so the
       // failure branch has to say that rather than reading like a lost upload.
       const agentMessage = result.agent
-        ? { ...message('agent', result.agent.text), fixture: result.agent.fixture }
+        ? { ...message('agent', result.agent.summary), fixture: result.agent.fixture }
         : {
             ...message(
               'agent',
@@ -75,6 +87,9 @@ export default function App() {
           };
 
       append(analysisId, [analystMessage, agentMessage]);
+      // Replaced wholesale rather than merged: a later upload is a fresh reading
+      // of the documents, not an amendment to the previous one.
+      if (result.agent) setFields(analysisId, result.agent.fields);
       return true;
     } catch (error) {
       const detail =
@@ -98,7 +113,7 @@ export default function App() {
       return (
         <Workspace
           analysis={analysis}
-          onSend={(text, files) => send(analysis.id, text, files)}
+          onSend={(text, files) => send(analysis, text, files)}
           onBack={() => setView({ name: 'list' })}
         />
       );

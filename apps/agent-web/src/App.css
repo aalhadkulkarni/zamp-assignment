@@ -162,6 +162,84 @@
   }
 }
 
+/* ---------- Review table ---------- */
+
+.review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.review-table th {
+  text-align: left;
+  font-weight: 500;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--text);
+  padding: 0 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+.review-table .numeric {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.field-key {
+  display: block;
+  color: var(--text-h);
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.confidence {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  letter-spacing: 0.3px;
+}
+
+.confidence-high {
+  color: var(--text);
+}
+
+/* Anything below high is a prompt to look, so it has to catch the eye. */
+.confidence-medium,
+.confidence-low {
+  color: var(--danger);
+}
+
+.value {
+  display: block;
+  color: var(--text-h);
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
+.units {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+}
+
+.source-text {
+  color: var(--text-h);
+  quotes: '“' '”';
+}
+
+.row-blank {
+  background: var(--danger-bg);
+}
+
 /* ---------- Chat ---------- */
 
 .chat-log {

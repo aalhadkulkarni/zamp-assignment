@@ -2,7 +2,13 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { ApiError, listFunds, uploadDocuments, type UploadResult } from './api';
+import {
+  ApiError,
+  listFunds,
+  uploadDocuments,
+  type ReviewField,
+  type UploadResult,
+} from './api';
 import { MAX_FILE_BYTES } from './files';
 
 vi.mock('./api', async (importOriginal) => ({
@@ -21,11 +27,35 @@ const FUNDS = [
 ];
 const FUND_LABEL = FUNDS[0].name;
 
-const AGENT_TEXT = 'Received your two documents. Extraction is next.';
+const AGENT_TEXT = 'I found four of the five values. Total receivables was not broken out.';
+
+/** Shaped like a real extraction: real figures, thousands, and one genuine blank. */
+const FIELDS: ReviewField[] = [
+  {
+    key: 'total_investments',
+    value: 462_090_073_000,
+    valueAsPrinted: 462_090_073,
+    unitsMultiplier: 1000,
+    confidence: 'high',
+    sourcePage: 1,
+    sourceText: 'Total Investments $462,090,073',
+    reasoning: 'Investments at Fair Value section, PERF A column.',
+  },
+  {
+    key: 'total_receivables',
+    value: null,
+    valueAsPrinted: null,
+    unitsMultiplier: 1000,
+    confidence: 'low',
+    sourcePage: null,
+    sourceText: '',
+    reasoning: 'No combined receivables line in the PERF A column.',
+  },
+];
 
 /** Echoes back what the real endpoint returns for an accepted upload. */
 function accepts(overrides: Partial<UploadResult> = {}) {
-  mockUpload.mockImplementation(async (analysisId, files, prompt) => ({
+  mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => ({
     uploadId: 'upload-1',
     analysisId,
     prompt,
@@ -37,8 +67,9 @@ function accepts(overrides: Partial<UploadResult> = {}) {
     })),
     agent: {
       model: 'claude-opus-5',
-      text: AGENT_TEXT,
-      usage: { inputTokens: 120, outputTokens: 14 },
+      summary: AGENT_TEXT,
+      fields: FIELDS,
+      usage: { inputTokens: 24180, outputTokens: 742 },
       fixture: false,
     },
     agentError: null,
@@ -204,8 +235,9 @@ describe('sending', () => {
     accepts({
       agent: {
         model: 'claude-opus-5',
-        text: AGENT_TEXT,
-        usage: { inputTokens: 236, outputTokens: 70 },
+        summary: AGENT_TEXT,
+        fields: FIELDS,
+        usage: { inputTokens: 24180, outputTokens: 742 },
         fixture: true,
       },
     });
@@ -214,6 +246,51 @@ describe('sending', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('recorded')).toBeInTheDocument();
+  });
+
+  it('renders the extracted values as a table beside the chat', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    expect(screen.getByText('No values yet.')).toBeInTheDocument();
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const review = await screen.findByRole('table');
+    expect(within(review).getByText('total_investments')).toBeInTheDocument();
+    // Whole dollars, not the printed thousands.
+    expect(within(review).getByText('$462,090,073,000')).toBeInTheDocument();
+    expect(within(review).getByText(/Total Investments \$462,090,073/)).toBeInTheDocument();
+  });
+
+  /**
+   * The analyst checks the printed figure against the page, then checks we
+   * scaled it correctly. Hiding the multiplier makes the second check
+   * impossible without reopening the document.
+   */
+  it('shows the printed figure and the multiplier behind a scaled value', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const review = await screen.findByRole('table');
+    expect(within(review).getByText('462,090,073 × 1,000')).toBeInTheDocument();
+  });
+
+  it('marks a value it could not find rather than inventing one', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    const review = await screen.findByRole('table');
+    const row = within(review).getByText('total_receivables').closest('tr')!;
+    expect(within(row).getByText('not found')).toBeInTheDocument();
+    expect(within(row).getByText('low')).toBeInTheDocument();
   });
 
   it('does not mark a real reply as recorded', async () => {
@@ -272,8 +349,10 @@ describe('sending', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(mockUpload).toHaveBeenCalledOnce());
-    const [analysisId, files, prompt] = mockUpload.mock.calls[0];
+    const [analysisId, fundId, files, prompt] = mockUpload.mock.calls[0];
     expect(analysisId).toMatch(/^[0-9a-f-]{36}$/);
+    // The fund was chosen on the landing page; extraction needs to know which.
+    expect(fundId).toBe(FUNDS[0].id);
     expect(files.map((f) => f.name)).toEqual(['acfr.pdf']);
     expect(prompt).toBe('use the table on page 4');
 
@@ -291,7 +370,7 @@ describe('sending', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(mockUpload).toHaveBeenCalledOnce());
-    expect(mockUpload.mock.calls[0][1].map((f) => f.name)).toEqual(['good.pdf']);
+    expect(mockUpload.mock.calls[0][2].map((f) => f.name)).toEqual(['good.pdf']);
   });
 
   /**

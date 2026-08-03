@@ -36,6 +36,21 @@ vi.mock('@anthropic-ai/sdk', () => {
 });
 
 /**
+ * The customer's service is stubbed. Standing a second HTTP server up for every
+ * upload test would be testing their code, not ours.
+ */
+const FIELD_DEFINITIONS = [
+  { key: 'total_investments', label: 'Total Investments', type: 'money', unit: 'USD', required: true, description: 'Total investments held at fair value.' },
+  { key: 'net_position', label: 'Net Position Restricted for Pensions', type: 'money', unit: 'USD', required: true, description: 'Net position restricted for pension benefits.' },
+];
+
+vi.mock('./customer.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./customer.js')>()),
+  listFieldDefinitions: vi.fn(async () => FIELD_DEFINITIONS),
+  listFunds: vi.fn(async () => [{ id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' }]),
+}));
+
+/**
  * These run against a listening server rather than app.inject, because the thing
  * under test is multipart parsing. Hand-building a multipart body to feed inject
  * would mean testing our own encoder as much as the endpoint.
@@ -73,14 +88,39 @@ beforeEach(() => {
   create.mockResolvedValue({
     model: 'claude-opus-5',
     stop_reason: 'end_turn',
-    content: [{ type: 'text', text: 'Received your documents. Extraction is next.' }],
-    usage: { input_tokens: 120, output_tokens: 14 },
+    content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+    usage: { input_tokens: 24180, output_tokens: 742 },
   });
 });
 
 afterEach(async () => {
   await rm(join(dataRoot, TENANT), { recursive: true, force: true });
 });
+
+/** Printed in thousands, as the document prints it, so units are exercised. */
+const EXTRACTION = {
+  summary: 'I found the investments total. Net position was not on these pages.',
+  fields: [
+    {
+      key: 'total_investments',
+      valueAsPrinted: 462_090_073,
+      unitsMultiplier: 1000,
+      confidence: 'high',
+      sourcePage: 1,
+      sourceText: 'Total Investments $462,090,073',
+      reasoning: 'Investments at Fair Value, PERF A column.',
+    },
+    {
+      key: 'net_position',
+      valueAsPrinted: null,
+      unitsMultiplier: 1000,
+      confidence: 'low',
+      sourcePage: null,
+      sourceText: '',
+      reasoning: 'Not present on the supplied pages.',
+    },
+  ],
+};
 
 function pdf(name: string, size = 64): File {
   return new File([new Uint8Array(size)], name, { type: 'application/pdf' });
@@ -101,10 +141,15 @@ async function sdkError(
 
 async function upload(
   files: File[],
-  { prompt, analysisId = ANALYSIS }: { prompt?: string; analysisId?: string } = {},
+  {
+    prompt,
+    analysisId = ANALYSIS,
+    fundId = 'calpers',
+  }: { prompt?: string; analysisId?: string; fundId?: string | null } = {},
 ) {
   const form = new FormData();
   if (prompt !== undefined) form.set('prompt', prompt);
+  if (fundId !== null) form.set('fundId', fundId);
   for (const file of files) form.append('documents', file, file.name);
 
   const response = await fetch(`${baseUrl}/analyses/${analysisId}/documents`, {
@@ -151,9 +196,10 @@ describe('POST /analyses/:analysisId/documents', () => {
     const written = await readdir(uploadDir(TENANT, ANALYSIS));
     expect(written.some((f) => f.endsWith('AllTeams - GW2 _1_.pdf'))).toBe(true);
 
-    // And the model is told the analyst's name, not ours.
+    // The document is titled with the analyst's name, not our sanitised one.
     const [{ messages }] = create.mock.calls[0];
-    expect(messages[0].content).toContain('AllTeams - GW2 (1).pdf');
+    const attached = messages[0].content.find((b: { type: string }) => b.type === 'document');
+    expect(attached.title).toBe('AllTeams - GW2 (1).pdf');
   });
 
   it('writes the bytes to disk under the tenant and analysis', async () => {
@@ -241,28 +287,74 @@ describe('POST /analyses/:analysisId/documents', () => {
     expect(response.status).toBe(415);
   });
 
-  it('returns the model reply alongside the stored documents', async () => {
+  it('returns the summary and the extracted rows alongside the documents', async () => {
     const { status, body } = await upload([pdf('acfr.pdf')]);
 
     expect(status).toBe(200);
-    expect(body.agent).toEqual({
+    expect(body.agentError).toBeNull();
+    expect(body.agent).toMatchObject({
       model: 'claude-opus-5',
-      text: 'Received your documents. Extraction is next.',
-      usage: { inputTokens: 120, outputTokens: 14 },
+      summary: expect.stringContaining('investments total'),
+      usage: { inputTokens: 24180, outputTokens: 742 },
       fixture: false,
     });
-    expect(body.agentError).toBeNull();
+    expect(body.agent.fields).toHaveLength(2);
   });
 
-  it('tells the model what was uploaded, and quotes the analyst note', async () => {
+  /**
+   * The model reports the printed figure and the multiplier; the multiplication
+   * is ours. This is the assertion that keeps it that way.
+   */
+  it('applies the document units rather than asking the model to', async () => {
+    const { body } = await upload([pdf('acfr.pdf')]);
+
+    const investments = body.agent.fields.find(
+      (f: { key: string }) => f.key === 'total_investments',
+    );
+    expect(investments.valueAsPrinted).toBe(462_090_073);
+    expect(investments.unitsMultiplier).toBe(1000);
+    expect(investments.value).toBe(462_090_073_000);
+  });
+
+  it('leaves a value the model could not find as null, not zero', async () => {
+    const { body } = await upload([pdf('acfr.pdf')]);
+
+    const missing = body.agent.fields.find((f: { key: string }) => f.key === 'net_position');
+    expect(missing.value).toBeNull();
+    expect(missing.confidence).toBe('low');
+  });
+
+  it('asks the model only for fields the customer actually publishes', async () => {
+    await upload([pdf('acfr.pdf')]);
+
+    const [{ output_config }] = create.mock.calls[0];
+    const keys = output_config.format.schema.properties.fields.items.properties.key.enum;
+    // An enum here means the model cannot invent a field for customer-system to
+    // reject three steps later.
+    expect(keys).toEqual(['total_investments', 'net_position']);
+  });
+
+  it('refuses an upload that does not say which fund it is for', async () => {
+    const { status, body } = await upload([pdf('acfr.pdf')], { fundId: null });
+
+    expect(status).toBe(400);
+    expect(body.error).toBe('MissingFund');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('attaches the documents and quotes the analyst note', async () => {
     await upload([pdf('acfr.pdf'), pdf('notes.md')], {
       prompt: 'Figures are in thousands.',
     });
 
     const [{ messages }] = create.mock.calls[0];
-    expect(messages[0].content).toContain('acfr.pdf');
-    expect(messages[0].content).toContain('notes.md');
-    expect(messages[0].content).toContain('Figures are in thousands.');
+    const blocks = messages[0].content;
+
+    // The PDF goes as a document block; text files go inline.
+    expect(blocks.filter((b: { type: string }) => b.type === 'document')).toHaveLength(1);
+    const instruction = blocks.at(-1);
+    expect(instruction.text).toContain('Figures are in thousands.');
+    expect(instruction.text).toContain('CalPERS');
   });
 
   /**
@@ -329,7 +421,8 @@ describe('POST /analyses/:analysisId/documents', () => {
 
       expect(status).toBe(200);
       expect(body.agent.fixture).toBe(true);
-      expect(body.agent.text).toMatch(/extraction is the next step/i);
+      expect(body.agent.summary).toMatch(/four of the five values/i);
+      expect(body.agent.fields).toHaveLength(5);
       expect(create).not.toHaveBeenCalled();
     });
 

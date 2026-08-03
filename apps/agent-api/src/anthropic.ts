@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import Anthropic from '@anthropic-ai/sdk';
+import type { Extraction } from './extraction.js';
 
 /**
  * The key is read from the environment and never leaves this service. The
@@ -147,6 +148,89 @@ export async function ask(prompt: string): Promise<Reply> {
   };
 }
 
+/** A document on its way to the model. PDFs go as documents, text as text. */
+export type Attachment = {
+  filename: string;
+  /** '.pdf' | '.txt' | '.md' */
+  extension: string;
+  bytes: Buffer;
+};
+
+export type ExtractionReply = {
+  model: string;
+  extraction: Extraction;
+  usage: { inputTokens: number; outputTokens: number };
+  fixture: boolean;
+};
+
+/**
+ * Extraction, with the documents attached and the answer constrained to the
+ * customer's field list.
+ *
+ * Adaptive thinking here, unlike the acknowledgement call: reading the right
+ * figure out of a table with six columns and a units heading three inches away
+ * is exactly the kind of work worth paying to think about.
+ */
+export async function extract(
+  prompt: string,
+  attachments: Attachment[],
+  schema: Record<string, unknown>,
+): Promise<ExtractionReply> {
+  const content = [
+    ...attachments.map((file) =>
+      file.extension === '.pdf'
+        ? ({
+            type: 'document' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: 'application/pdf' as const,
+              data: file.bytes.toString('base64'),
+            },
+            title: file.filename,
+          })
+        : ({
+            type: 'text' as const,
+            text: `--- ${file.filename} ---\n${file.bytes.toString('utf8')}`,
+          }),
+    ),
+    // Documents first, instruction last: the model reads in order, and the ask
+    // lands better after the material it applies to.
+    { type: 'text' as const, text: prompt },
+  ];
+
+  const response = await client().messages.create({
+    model: model(),
+    max_tokens: 8192,
+    thinking: { type: 'adaptive' },
+    output_config: {
+      effort: 'high',
+      format: { type: 'json_schema', schema },
+    },
+    messages: [{ role: 'user', content }],
+  });
+
+  if (response.stop_reason === 'refusal') {
+    throw new RefusedError(response.stop_details?.category ?? null);
+  }
+
+  const text = response.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('');
+
+  return {
+    model: response.model,
+    // Structured outputs guarantee the shape, so a parse failure here means
+    // something upstream changed rather than the model wandering off.
+    extraction: JSON.parse(text) as Extraction,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    },
+    fixture: false,
+  };
+}
+
 /**
  * Same signature as `ask`, no network call. The text below is a real reply
  * recorded from claude-opus-5 on 2026-08-03, not something invented — a made-up
@@ -156,6 +240,87 @@ export async function ask(prompt: string): Promise<Reply> {
  * The prompt is accepted and ignored. Keeping the signature identical is what
  * lets the route pick between the two without knowing which it has.
  */
+/**
+ * A recorded extraction, shaped exactly like a real one. The figures are the
+ * real CalPERS PERF A column, printed in thousands as the document prints them,
+ * so the units arithmetic downstream is exercised rather than bypassed.
+ *
+ * total_receivables is deliberately left null. A fixture where everything
+ * succeeds hides the null rendering, the confidence rendering, and the
+ * "what do I do about a blank" question — which is most of what the review table
+ * exists to handle.
+ */
+export async function extractFixture(
+  _prompt: string,
+  _attachments: Attachment[],
+  _schema: Record<string, unknown>,
+): Promise<ExtractionReply> {
+  await sleep(fixtureDelayMs());
+
+  return {
+    model: 'claude-opus-5',
+    fixture: true,
+    usage: { inputTokens: 24_180, outputTokens: 742 },
+    extraction: {
+      summary:
+        'I found four of the five values on the statement of fiduciary net position. ' +
+        'The figures are reported in thousands, and this page carries six plan columns — ' +
+        'I read PERF A, the largest. Total receivables is shown only as a breakdown by ' +
+        'counterparty, with no combined line, so I have left it blank rather than adding ' +
+        'the components up myself.',
+      fields: [
+        {
+          key: 'total_receivables',
+          valueAsPrinted: null,
+          unitsMultiplier: 1000,
+          confidence: 'low',
+          sourcePage: 1,
+          sourceText: '',
+          reasoning:
+            'No combined receivables line in the PERF A column; only the individual counterparty rows.',
+        },
+        {
+          key: 'total_investments',
+          valueAsPrinted: 462_090_073,
+          unitsMultiplier: 1000,
+          confidence: 'high',
+          sourcePage: 1,
+          sourceText: 'Total Investments $462,090,073',
+          reasoning: 'Investments at Fair Value section, PERF A column.',
+        },
+        {
+          key: 'total_assets',
+          valueAsPrinted: 508_215_927,
+          unitsMultiplier: 1000,
+          confidence: 'high',
+          sourcePage: 1,
+          sourceText: 'TOTAL ASSETS $508,215,927',
+          reasoning: 'PERF A column, before deferred outflows of resources.',
+        },
+        {
+          key: 'total_liabilities',
+          valueAsPrinted: 98_831_325,
+          unitsMultiplier: 1000,
+          confidence: 'high',
+          sourcePage: 1,
+          sourceText: 'TOTAL LIABILITIES $98,831,325',
+          reasoning: 'PERF A column, before deferred inflows of resources.',
+        },
+        {
+          key: 'net_position',
+          valueAsPrinted: 409_424_367,
+          unitsMultiplier: 1000,
+          confidence: 'high',
+          sourcePage: 1,
+          sourceText:
+            'NET POSITION – RESTRICTED FOR PENSION, OTHER POST-EMPLOYMENT, REPLACEMENT BENEFITS AND PROGRAM ADMINISTRATION $409,424,367',
+          reasoning: 'PERF A column. Labelled at length here, but it is the net position line.',
+        },
+      ],
+    },
+  };
+}
+
 export async function askFixture(_prompt: string): Promise<Reply> {
   await sleep(fixtureDelayMs());
 
