@@ -479,7 +479,9 @@ describe('POST /analyses/:analysisId/documents', () => {
 
 
 describe('POST /analyses/:analysisId/report', () => {
-  async function write(body: unknown) {
+  // `object`, not `unknown` — inject's payload is typed, and unknown breaks the
+  // overload, which then makes statusCode and json() look like they don't exist.
+  async function write(body: object) {
     const res = await app.inject({
       method: 'POST',
       url: `/analyses/${ANALYSIS}/report`,
