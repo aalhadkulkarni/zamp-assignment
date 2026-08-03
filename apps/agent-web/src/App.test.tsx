@@ -21,7 +21,12 @@ function accepts(overrides: Partial<UploadResult> = {}) {
     uploadId: 'upload-1',
     analysisId,
     prompt,
-    documents: files.map((f, i) => ({ id: `doc-${i}`, filename: f.name, size: f.size })),
+    documents: files.map((f, i) => ({
+      id: `doc-${i}`,
+      filename: f.name,
+      storedAs: f.name,
+      size: f.size,
+    })),
     agent: {
       model: 'claude-opus-5',
       text: AGENT_TEXT,

@@ -14,7 +14,10 @@ export type IncomingDocument = {
 
 export type StoredDocument = {
   id: string;
+  /** As the analyst named it. What we show them and what the model is told. */
   filename: string;
+  /** Sanitised. Only ever used to build a path on disk. */
+  storedAs: string;
   size: number;
 };
 
@@ -88,9 +91,12 @@ export async function storeUpload(
   const stored: StoredDocument[] = [];
   for (const doc of documents) {
     const id = crypto.randomUUID();
-    const filename = safeFilename(doc.filename);
-    await writeFile(join(dir, `${id}-${filename}`), doc.bytes);
-    stored.push({ id, filename, size: doc.bytes.length });
+    // Sanitising is about where the bytes land, not about what the analyst is
+    // allowed to call their file. Showing them a name they did not choose makes
+    // it look like we mangled their document.
+    const storedAs = safeFilename(doc.filename);
+    await writeFile(join(dir, `${id}-${storedAs}`), doc.bytes);
+    stored.push({ id, filename: doc.filename, storedAs, size: doc.bytes.length });
   }
 
   await writeFile(

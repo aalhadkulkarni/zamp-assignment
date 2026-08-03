@@ -126,9 +126,30 @@ describe('POST /analyses/:analysisId/documents', () => {
     expect(body.analysisId).toBe(ANALYSIS);
     expect(body.uploadId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.documents).toEqual([
-      { id: expect.any(String), filename: 'acfr.pdf', size: 128 },
-      { id: expect.any(String), filename: 'notes.md', size: 32 },
+      { id: expect.any(String), filename: 'acfr.pdf', storedAs: 'acfr.pdf', size: 128 },
+      { id: expect.any(String), filename: 'notes.md', storedAs: 'notes.md', size: 32 },
     ]);
+  });
+
+  /**
+   * Sanitising decides where the bytes land, not what the analyst may call their
+   * file. Reporting the sanitised name back made it look like we had renamed
+   * their document.
+   */
+  it('reports the name the analyst chose, and stores under a safe one', async () => {
+    const { body } = await upload([
+      new File([new Uint8Array(64)], 'AllTeams - GW2 (1).pdf', { type: 'application/pdf' }),
+    ]);
+
+    expect(body.documents[0].filename).toBe('AllTeams - GW2 (1).pdf');
+    expect(body.documents[0].storedAs).toBe('AllTeams - GW2 _1_.pdf');
+
+    const written = await readdir(uploadDir(TENANT, ANALYSIS));
+    expect(written.some((f) => f.endsWith('AllTeams - GW2 _1_.pdf'))).toBe(true);
+
+    // And the model is told the analyst's name, not ours.
+    const [{ messages }] = create.mock.calls[0];
+    expect(messages[0].content).toContain('AllTeams - GW2 (1).pdf');
   });
 
   it('writes the bytes to disk under the tenant and analysis', async () => {

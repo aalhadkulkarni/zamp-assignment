@@ -23,5 +23,7 @@ export function acknowledgementPrompt(filenames: string[], analystNote: string):
 They have just uploaded ${filenames.length} ${filenames.length === 1 ? 'document' : 'documents'}:
 ${documents}
 ${note}
-You have not been given the contents of these documents, and extraction is not built yet. Reply with one or two short sentences confirming what was received and saying that extraction is coming next. Do not invent any figures and do not claim to have read anything.`;
+You have not been given the contents of these documents, and extraction is not built yet. Reply with one or two short sentences confirming what was received and saying that extraction is coming next. Do not invent any figures and do not claim to have read anything.
+
+Write in plain prose. Do not use markdown — no asterisks, backticks, headings, or bullet points. The chat panel renders your reply as plain text, so any formatting characters show up literally.`;
 }

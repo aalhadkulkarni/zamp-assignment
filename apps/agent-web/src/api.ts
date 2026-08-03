@@ -2,7 +2,10 @@ const AGENT_API = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:3001';
 
 export type UploadedDocument = {
   id: string;
+  /** As the analyst named it. */
   filename: string;
+  /** Sanitised name on the server's disk. Not shown to the analyst. */
+  storedAs: string;
   size: number;
 };
 
