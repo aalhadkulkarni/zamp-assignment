@@ -280,11 +280,10 @@ describe('sending', () => {
     // The analyst checks the figure against the page and the scaling against the
     // heading. Both have to be on screen, or the second check means reopening
     // the document.
-    // The value is editable and in whole dollars; the printed figure and the
-    // scaling stay visible as provenance so the analyst can check both.
+    // The value is editable and in whole dollars, with the readable form beside
+    // it so the analyst can check the figure without parsing digits.
     expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073000');
     expect(screen.getByText('$462,090,073,000')).toBeInTheDocument();
-    expect(screen.getByText('printed 462,090,073 × 1,000')).toBeInTheDocument();
   });
 
   it('marks a value it could not find rather than inventing one', async () => {
@@ -352,6 +351,37 @@ describe('sending', () => {
 
       expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
       expect(screen.getByText('edited')).toBeInTheDocument();
+    });
+
+    /**
+     * A value typed back to what the model said is not a correction. Leaving the
+     * row flagged would overstate what the analyst changed, and step 9 would
+     * send a change that never happened off for a diagnosis.
+     */
+    it('stops treating a field as edited once it matches the model again', async () => {
+      const user = await extracted();
+      const value = screen.getByLabelText('total_investments value');
+
+      await user.type(value, '0');
+      expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
+
+      await user.clear(value);
+      await user.type(value, '462090073000');
+
+      expect(await screen.findByText('Nothing changed yet.')).toBeInTheDocument();
+      expect(screen.queryByText('edited')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'revert' })).not.toBeInTheDocument();
+    });
+
+    it('treats clearing a value the model did not find as no change', async () => {
+      const user = await extracted();
+      const value = screen.getByLabelText('total_receivables value');
+
+      await user.type(value, '123');
+      expect(await screen.findByText('1 value corrected.')).toBeInTheDocument();
+
+      await user.clear(value);
+      expect(await screen.findByText('Nothing changed yet.')).toBeInTheDocument();
     });
 
     it('puts a corrected value back the way the model had it', async () => {

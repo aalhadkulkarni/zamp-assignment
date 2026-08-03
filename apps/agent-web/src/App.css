@@ -223,14 +223,6 @@
   font-size: 15px;
 }
 
-.units {
-  display: block;
-  margin-top: 2px;
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text);
-}
-
 .source-text {
   color: var(--text-h);
   quotes: '“' '”';

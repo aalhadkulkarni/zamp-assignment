@@ -51,26 +51,39 @@ export default function App() {
     );
   }
 
+  function without(edits: Analysis['edits'], key: string): Analysis['edits'] {
+    return Object.fromEntries(Object.entries(edits).filter(([edited]) => edited !== key));
+  }
+
+  /** What the model said, as text, for comparing against what the analyst typed. */
+  function originalValue(analysis: Analysis, key: string): string {
+    const field = analysis.fields.find((f) => f.key === key);
+    return field?.value == null ? '' : String(field.value);
+  }
+
+  /**
+   * Typing a value back to what the model said is not a correction, so it does
+   * not get recorded as one. Kept canonical here rather than filtered in the
+   * view: step 9 turns these into edit events, and a no-op edit would be sent
+   * off for a diagnosis of a change that never happened.
+   */
   function editField(analysisId: string, key: string, value: string) {
     setAnalyses((current) =>
-      current.map((a) =>
-        a.id === analysisId ? { ...a, edits: { ...a.edits, [key]: value } } : a,
-      ),
+      current.map((a) => {
+        if (a.id !== analysisId) return a;
+        return value.trim() === originalValue(a, key)
+          ? { ...a, edits: without(a.edits, key) }
+          : { ...a, edits: { ...a.edits, [key]: value } };
+      }),
     );
   }
 
   /** Drops the correction entirely rather than writing the model's value back
    *  as an edit — an untouched field and a field corrected to its original
-   *  value are different things, and step 10 has to tell them apart. */
+   *  value are the same thing, and neither is a correction. */
   function revertField(analysisId: string, key: string) {
     setAnalyses((current) =>
-      current.map((a) => {
-        if (a.id !== analysisId) return a;
-        const remaining = Object.fromEntries(
-          Object.entries(a.edits).filter(([edited]) => edited !== key),
-        );
-        return { ...a, edits: remaining };
-      }),
+      current.map((a) => (a.id === analysisId ? { ...a, edits: without(a.edits, key) } : a)),
     );
   }
 

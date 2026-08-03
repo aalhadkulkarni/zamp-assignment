@@ -81,17 +81,6 @@ export default function ReviewTable({ fields, edits, onEdit, onRevert }: Props) 
 
                 <span className="readable">{shown ?? 'not found'}</span>
 
-                {/* Read-only provenance, not a control. The analyst checks the
-                    printed figure against the page and the scaling against the
-                    heading without reopening the document. */}
-                {field.unitsMultiplier !== 1 && field.valueAsPrinted !== null && (
-                  // One string, not interpolated fragments — JSX whitespace
-                  // would otherwise split it across text nodes.
-                  <span className="units subtle">
-                    {`printed ${field.valueAsPrinted.toLocaleString('en-US')} × ${field.unitsMultiplier.toLocaleString('en-US')}`}
-                  </span>
-                )}
-
                 {edited && (
                   <button className="link revert" onClick={() => onRevert(field.key)}>
                     revert
