@@ -374,6 +374,120 @@
   font-size: 13px;
 }
 
+/* ---------- Proposed lessons ---------- */
+
+.lessons {
+  flex-shrink: 0;
+  max-height: 45%;
+  overflow-y: auto;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lesson {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+}
+
+/* Scope is the consequential part, so it is what colours the card. A rule that
+   would apply to every fund should not look like a note about one document. */
+.lesson-none {
+  border-color: var(--border);
+}
+
+.lesson-fund {
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+
+.lesson-global {
+  border-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.lesson-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.lesson-type {
+  color: var(--text-h);
+  font-weight: 500;
+}
+
+.lesson-confidence {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.lesson-explanation {
+  color: var(--text-h);
+}
+
+.lesson-rule {
+  margin-top: 6px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text);
+}
+
+.lesson-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-h);
+}
+
+.lesson-fields {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.lesson-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.lesson-actions button {
+  font-size: 13px;
+  padding: 6px 12px;
+}
+
+.lesson-reject {
+  margin-top: 10px;
+}
+
+.lesson-reject label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-h);
+}
+
+.lesson-resolved {
+  color: var(--text);
+}
+
+.lesson-comment {
+  margin-top: 4px;
+  color: var(--text);
+  font-style: italic;
+}
+
+.lesson-accepted {
+  border-color: var(--accent-border);
+}
+
 /* ---------- Pending corrections ---------- */
 
 /* Sits between the log and the composer: not history, not an action — the

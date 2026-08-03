@@ -1,4 +1,5 @@
 import ChatPanel from './ChatPanel';
+import LessonCard from './LessonCard';
 import PendingEdits from './PendingEdits';
 import ReviewTable from './ReviewTable';
 import Composer from './Composer';
@@ -10,6 +11,8 @@ type Props = {
   onEdit: (key: string, value: string) => void;
   onCommit: (key: string) => void;
   onRevert: (key: string) => void;
+  onAcceptLesson: (lessonId: string) => void;
+  onRejectLesson: (lessonId: string, comment: string) => void;
   onPeriodChange: (fiscalYearEnd: string) => void;
   onConfirm: () => void;
   writing: boolean;
@@ -22,6 +25,8 @@ export default function Workspace({
   onEdit,
   onCommit,
   onRevert,
+  onAcceptLesson,
+  onRejectLesson,
   onPeriodChange,
   onConfirm,
   writing,
@@ -43,6 +48,22 @@ export default function Workspace({
       <div className="workspace-body">
         <section className="chat" aria-label="Agent conversation">
           <ChatPanel messages={analysis.messages} />
+
+          {/* Proposals sit above the composer, where the analyst's attention
+              already is once they have submitted. */}
+          {analysis.lessons.length > 0 && (
+            <section className="lessons" aria-label="Proposed lessons">
+              {analysis.lessons.map((lesson) => (
+                <LessonCard
+                  key={lesson.id}
+                  lesson={lesson}
+                  onAccept={onAcceptLesson}
+                  onReject={onRejectLesson}
+                />
+              ))}
+            </section>
+          )}
+
           {!approved && <PendingEdits edits={analysis.editEvents} />}
           <Composer onSend={onSend} />
         </section>

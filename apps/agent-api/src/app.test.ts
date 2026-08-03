@@ -602,11 +602,107 @@ describe('POST /analyses/:analysisId/edits', () => {
     return { status: res.statusCode, body: res.json() };
   }
 
+  const DIAGNOSIS_REPLY = {
+    model: 'claude-opus-5',
+    stop_reason: 'end_turn',
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          summary: 'You scaled a figure that was already in whole dollars.',
+          lessons: [
+            {
+              type: 'units',
+              scope: 'fund',
+              fieldKeys: ['total_investments'],
+              explanation: 'The heading said thousands but this section did not follow it.',
+              rule: 'Check whether the investments section restates its units.',
+              confidence: 'medium',
+            },
+          ],
+        }),
+      },
+    ],
+    usage: { input_tokens: 1840, output_tokens: 410 },
+  };
+
+  beforeEach(() => {
+    create.mockResolvedValue(DIAGNOSIS_REPLY);
+  });
+
   it('stores the batch and says how many it took', async () => {
     const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT, { ...EDIT, id: 'edit-2', fieldKey: 'net_position' }] });
 
     expect(status).toBe(201);
-    expect(body).toEqual({ batchId: expect.any(String), received: 2 });
+    expect(body).toMatchObject({ batchId: expect.any(String), received: 2 });
+  });
+
+  describe('the diagnosis', () => {
+    it('asks the model why, and returns what it proposed', async () => {
+      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      expect(body.diagnosis.summary).toMatch(/already in whole dollars/);
+      expect(body.diagnosis.lessons).toHaveLength(1);
+      expect(body.diagnosis.lessons[0]).toMatchObject({ type: 'units', scope: 'fund' });
+      expect(body.error).toBeNull();
+    });
+
+    /** An accept has to name exactly one lesson, and a model inventing ids is a
+     *  way to get collisions and dangling references for no benefit. */
+    it('assigns the lesson ids itself', async () => {
+      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+      expect(body.diagnosis.lessons[0].id).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('sends the correction and its provenance, but not the documents', async () => {
+      await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      const [{ messages }] = create.mock.calls[0];
+      const prompt = messages[0].content;
+
+      expect(prompt).toContain('462090073000');
+      expect(prompt).toContain('462090073');
+      expect(prompt).toContain('Total Investments $462,090,073');
+      expect(prompt).toContain('PERF A column.');
+      // The model already told us its reasoning; re-attaching the pages would
+      // invite it to re-extract rather than examine that reasoning.
+      expect(typeof prompt).toBe('string');
+    });
+
+    it('constrains the lessons to fields that were actually corrected', async () => {
+      await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      const [{ output_config }] = create.mock.calls[0];
+      const keys =
+        output_config.format.schema.properties.lessons.items.properties.fieldKeys.items.enum;
+      expect(keys).toEqual(['total_investments']);
+    });
+
+    /** The corrections are the raw material. Losing them because the
+     *  explanation failed would be the expensive half of the mistake. */
+    it('keeps the corrections when the diagnosis fails', async () => {
+      create.mockRejectedValue(await sdkError('RateLimitError', 429));
+
+      const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      expect(status).toBe(201);
+      expect(body.batchId).toEqual(expect.any(String));
+      expect(body.diagnosis).toBeNull();
+      expect(body.error.code).toBe('RateLimited');
+
+      const stored = JSON.parse(
+        await readFile(join(uploadDir(TENANT, ANALYSIS), `edits-${body.batchId}.json`), 'utf8'),
+      );
+      expect(stored.edits).toHaveLength(1);
+    });
+
+    it('answers from the recording in fixture mode', async () => {
+      process.env.USE_FIXTURES = 'true';
+      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      expect(body.diagnosis.lessons.length).toBeGreaterThan(1);
+      expect(create).not.toHaveBeenCalled();
+    });
   });
 
   /**
@@ -631,7 +727,7 @@ describe('POST /analyses/:analysisId/edits', () => {
     const { status, body } = await submit({ fundId: 'calpers', edits: [] });
 
     expect(status).toBe(200);
-    expect(body).toEqual({ batchId: null, received: 0 });
+    expect(body).toMatchObject({ batchId: null, received: 0, diagnosis: null });
     await expect(readdir(uploadDir(TENANT, ANALYSIS))).rejects.toThrow();
   });
 

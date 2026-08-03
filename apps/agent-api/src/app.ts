@@ -4,6 +4,8 @@ import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import {
   describeFailure,
+  diagnose,
+  diagnoseFixture,
   extract,
   extractFixture,
   usingFixtures,
@@ -27,8 +29,9 @@ import {
   type IncomingDocument,
   type Rejection,
 } from './documents.js';
+import { diagnosisSchema, type Diagnosis } from './diagnosis.js';
 import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
-import { extractionPrompt } from './prompts.js';
+import { diagnosisPrompt, extractionPrompt } from './prompts.js';
 import { resolveTenant } from './tenant.js';
 
 /**
@@ -149,10 +152,11 @@ export async function buildApp() {
    * A batch rather than one call per field, because corrections made together
    * are usually one mistake seen from several angles. Five values all changed by
    * the same factor is a single misunderstanding about units; asked about one at
-   * a time, that pattern is invisible and step 10 would find five coincidences
-   * instead of a cause.
+   * a time, that pattern is invisible and the diagnosis would find five
+   * coincidences instead of a cause.
    *
-   * Stored only, for now. Step 10 turns the response into a proposed diagnosis.
+   * Returns the model's proposed lessons. Nothing is learned from them yet —
+   * that needs the analyst to confirm, which is step 11.
    */
   app.post<{
     Params: { analysisId: string };
@@ -174,11 +178,53 @@ export async function buildApp() {
 
     // Nothing to learn from. Not an error — the analyst simply agreed with us.
     if (edits.length === 0) {
-      return reply.code(200).send({ batchId: null, received: 0 });
+      return reply.code(200).send({ batchId: null, received: 0, diagnosis: null, error: null });
     }
 
     const batchId = await storeEdits(resolveTenant(request), analysisId, fundId, edits);
-    return reply.code(201).send({ batchId, received: edits.length });
+
+    // The corrections are recorded whatever happens next. A failed diagnosis
+    // must not lose them — they are the raw material, and the explanation can
+    // be attempted again.
+    let diagnosis: Diagnosis | null = null;
+    let error: ModelFailure | null = null;
+    try {
+      const [definitions, funds] = await Promise.all([listFieldDefinitions(), listFunds()]);
+      const fundName = funds.find((f) => f.id === fundId)?.name ?? fundId;
+      const fieldKeys = [...new Set(edits.map((e) => e.fieldKey))];
+
+      const run = usingFixtures() ? diagnoseFixture : diagnose;
+      const result = await run(
+        diagnosisPrompt(fundName, definitions, edits),
+        diagnosisSchema(fieldKeys) as unknown as Record<string, unknown>,
+      );
+
+      // Structured outputs should guarantee this, but the corrections are
+      // already safely stored — degrading to "could not explain" beats a 500
+      // that makes a successful write look like a failure.
+      if (!Array.isArray(result.diagnosis?.lessons)) {
+        throw new Error('The diagnosis did not come back in the expected shape.');
+      }
+
+      // Ids are assigned here, not asked of the model. A model inventing
+      // identifiers is a way to get collisions and dangling references for no
+      // benefit — and an accept has to name exactly one lesson.
+      diagnosis = {
+        summary: result.diagnosis.summary,
+        lessons: result.diagnosis.lessons.map((lesson) => ({
+          ...lesson,
+          id: crypto.randomUUID(),
+        })),
+      };
+    } catch (thrown) {
+      error = describeFailure(thrown) ?? {
+        code: 'DiagnosisFailed',
+        message: 'Your corrections were recorded, but could not be explained.',
+      };
+      request.log.warn({ err: thrown }, 'diagnosis failed after storing the corrections');
+    }
+
+    return reply.code(201).send({ batchId, received: edits.length, diagnosis, error });
   });
 
   app.post<{ Params: { analysisId: string } }>(

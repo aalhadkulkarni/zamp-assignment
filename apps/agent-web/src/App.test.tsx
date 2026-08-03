@@ -91,7 +91,7 @@ beforeEach(() => {
   mockWrite.mockReset();
   mockWrite.mockResolvedValue(undefined);
   mockSubmitEdits.mockReset();
-  mockSubmitEdits.mockResolvedValue(undefined);
+  mockSubmitEdits.mockResolvedValue({ batchId: 'batch-1', received: 1, diagnosis: null, error: null });
   accepts();
 });
 
@@ -505,6 +505,135 @@ describe('sending', () => {
       await user.tab();
 
       expect(await screen.findByText('2 corrections — not yet submitted')).toBeInTheDocument();
+    });
+  });
+
+  describe('the agent explaining a correction', () => {
+    const UNITS_LESSON = {
+      id: 'lesson-1',
+      type: 'units' as const,
+      scope: 'fund' as const,
+      fieldKeys: ['total_investments'],
+      explanation: 'I applied the thousands heading, but the figure you kept is the printed one.',
+      rule: 'For this fund, check whether the investments section restates its units.',
+      confidence: 'medium' as const,
+    };
+
+    async function corrected(diagnosis: unknown = { summary: 'Here is what I think went wrong.', lessons: [UNITS_LESSON] }) {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+      await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+      await user.clear(screen.getByLabelText('total_investments value'));
+      await user.type(screen.getByLabelText('total_investments value'), '462090073');
+      await user.tab();
+
+      mockSubmitEdits.mockResolvedValue({
+        batchId: 'batch-1',
+        received: 1,
+        diagnosis: diagnosis as never,
+        error: null,
+      });
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+      return user;
+    }
+
+    it('proposes a diagnosis with its reasoning and its reach', async () => {
+      await corrected();
+
+      expect(await screen.findByText('Wrong units')).toBeInTheDocument();
+      expect(screen.getByText(/I applied the thousands heading/)).toBeInTheDocument();
+      // Scope is the consequential part — stated in full, not as a tag.
+      expect(
+        screen.getByText('Would apply to every future document from this fund'),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/check whether the investments section/)).toBeInTheDocument();
+    });
+
+    it('puts the summary in the chat alongside the proposal', async () => {
+      await corrected();
+      expect(
+        await within(screen.getByRole('log')).findByText('Here is what I think went wrong.'),
+      ).toBeInTheDocument();
+    });
+
+    /** Nothing becomes a rule without the analyst saying so. */
+    it('records an acceptance against that lesson only', async () => {
+      const user = await corrected({
+        summary: 'Two things went wrong.',
+        lessons: [UNITS_LESSON, { ...UNITS_LESSON, id: 'lesson-2', type: 'typo', scope: 'none', rule: '' }],
+      });
+      await screen.findByText('Wrong units');
+
+      await user.click(screen.getByRole('button', { name: 'Remember this' }));
+
+      expect(await screen.findByText(/Accepted/)).toBeInTheDocument();
+      // The other proposal is untouched — agreeing with one implies nothing
+      // about the rest of the batch.
+      expect(screen.getByRole('button', { name: 'Agreed' })).toBeInTheDocument();
+    });
+
+    /** A lesson with nothing to remember should not offer to remember it. */
+    it('offers plain agreement when there is no rule to learn', async () => {
+      await corrected({
+        summary: 'Just a slip.',
+        lessons: [{ ...UNITS_LESSON, type: 'typo', scope: 'none', rule: '' }],
+      });
+
+      expect(await screen.findByRole('button', { name: 'Agreed' })).toBeInTheDocument();
+      expect(
+        screen.getByText('Applies to this document only — nothing will be remembered'),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * The correction goes on the lesson it refutes. Typed into the chat box it
+     * would have to be matched back to a proposal by guessing, which is the
+     * ambiguity this whole feature exists to remove.
+     */
+    it('takes a written correction attached to the proposal it refutes', async () => {
+      const user = await corrected();
+      await screen.findByText('Wrong units');
+
+      await user.click(screen.getByRole('button', { name: "That's not it" }));
+      expect(screen.getByRole('button', { name: 'Send correction' })).toBeDisabled();
+
+      await user.type(
+        screen.getByLabelText('What actually happened?'),
+        'That page reports investments in whole dollars.',
+      );
+      await user.click(screen.getByRole('button', { name: 'Send correction' }));
+
+      expect(await screen.findByText(/Rejected/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/That page reports investments in whole dollars/),
+      ).toBeInTheDocument();
+    });
+
+    it('says so when the corrections were stored but could not be explained', async () => {
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+      await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+      await user.type(screen.getByLabelText('total_receivables value'), '1');
+      await user.tab();
+
+      mockSubmitEdits.mockResolvedValue({
+        batchId: 'batch-1',
+        received: 1,
+        diagnosis: null,
+        error: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+      });
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      // Stored is not the same as explained, and the analyst should not have to
+      // guess which of the two happened.
+      expect(await screen.findByText(/could not work out why they were needed/)).toBeInTheDocument();
+      expect(screen.getByText(/rate limiting/)).toBeInTheDocument();
     });
   });
 

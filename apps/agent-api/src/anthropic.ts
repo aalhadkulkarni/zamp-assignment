@@ -1,5 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import Anthropic from '@anthropic-ai/sdk';
+import type { Diagnosis } from './diagnosis.js';
 import type { Extraction } from './extraction.js';
 
 /**
@@ -264,6 +265,109 @@ export async function extractFixture(
           sourceText:
             'NET POSITION – RESTRICTED FOR PENSION, OTHER POST-EMPLOYMENT, REPLACEMENT BENEFITS AND PROGRAM ADMINISTRATION $409,424,367',
           reasoning: 'PERF A column. Labelled at length here, but it is the net position line.',
+        },
+      ],
+    },
+  };
+}
+
+export type DiagnosisReply = {
+  model: string;
+  diagnosis: Diagnosis;
+  usage: { inputTokens: number; outputTokens: number };
+  fixture: boolean;
+};
+
+/**
+ * Explains a batch of corrections. No documents attached — see diagnosisPrompt.
+ *
+ * Adaptive thinking and high effort: working out whether four corrections share
+ * one cause, and how far that cause reaches, is the reasoning this whole project
+ * is about. A cheap wrong answer here is worse than no answer, because a
+ * confidently wrong lesson gets applied to every future document.
+ */
+export async function diagnose(
+  prompt: string,
+  schema: Record<string, unknown>,
+): Promise<DiagnosisReply> {
+  const response = await client().messages.create({
+    model: model(),
+    max_tokens: 4096,
+    thinking: { type: 'adaptive' },
+    output_config: { effort: 'high', format: { type: 'json_schema', schema } },
+    messages: [{ role: 'user', content: prompt }],
+  });
+
+  if (response.stop_reason === 'refusal') {
+    throw new RefusedError(response.stop_details?.category ?? null);
+  }
+
+  const text = response.content
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text)
+    .join('');
+
+  return {
+    model: response.model,
+    diagnosis: JSON.parse(text) as Diagnosis,
+    usage: {
+      inputTokens: response.usage.input_tokens,
+      outputTokens: response.usage.output_tokens,
+    },
+    fixture: false,
+  };
+}
+
+/**
+ * A recorded diagnosis of the two corrections the extraction fixture invites:
+ * the units mistake on total_investments, and the blank the model left.
+ *
+ * Two lessons rather than one, with different scopes, because a fixture where
+ * everything shares a cause would hide the case the UI most has to handle —
+ * several proposals, each needing its own decision.
+ */
+export async function diagnoseFixture(
+  _prompt: string,
+  _schema: Record<string, unknown>,
+): Promise<DiagnosisReply> {
+  await sleep(fixtureDelayMs());
+
+  return {
+    model: 'claude-opus-5',
+    fixture: true,
+    usage: { inputTokens: 1_840, outputTokens: 410 },
+    diagnosis: {
+      summary:
+        'Two separate things went wrong. I scaled the investments figure when the ' +
+        'statement had already given it in whole dollars, and I left receivables ' +
+        'blank when the analyst expects the components added up.',
+      lessons: [
+        {
+          id: 'lesson-units',
+          type: 'units',
+          scope: 'fund',
+          fieldKeys: ['total_investments'],
+          explanation:
+            'I read the "Dollars in Thousands" heading and multiplied, but the figure ' +
+            'you kept is the printed one unchanged. That suggests this statement ' +
+            'reports investments in whole dollars despite the heading.',
+          rule:
+            'For this fund, check whether the investments section restates its units ' +
+            'before applying the heading multiplier.',
+          confidence: 'medium',
+        },
+        {
+          id: 'lesson-receivables',
+          type: 'wrong_source',
+          scope: 'fund',
+          fieldKeys: ['total_receivables'],
+          explanation:
+            'I left this blank because there was no combined receivables line. You ' +
+            'supplied a figure, which matches the sum of the counterparty rows.',
+          rule:
+            'For this fund, when a total is not printed but its components are, add ' +
+            'the components and say that is what you did.',
+          confidence: 'high',
         },
       ],
     },

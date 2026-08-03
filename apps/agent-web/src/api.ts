@@ -88,6 +88,34 @@ export type EditEventPayload = {
   };
 };
 
+export type LessonType = 'typo' | 'wrong_source' | 'units' | 'concept_confusion' | 'synonym';
+/** none: nothing to remember. fund: every future document from this fund.
+ *  global: every document from every fund. */
+export type LessonScope = 'none' | 'fund' | 'global';
+
+export type Lesson = {
+  id: string;
+  type: LessonType;
+  scope: LessonScope;
+  fieldKeys: string[];
+  explanation: string;
+  rule: string;
+  confidence: 'high' | 'medium' | 'low';
+};
+
+export type Diagnosis = {
+  summary: string;
+  lessons: Lesson[];
+};
+
+export type EditsResult = {
+  batchId: string | null;
+  received: number;
+  /** Null when the corrections were stored but the model could not be reached. */
+  diagnosis: Diagnosis | null;
+  error: { code: string; message: string } | null;
+};
+
 /**
  * The whole batch in one call. Corrections made together are usually one
  * mistake seen from several angles, and sending them one at a time would hide
@@ -97,7 +125,7 @@ export async function submitEdits(
   analysisId: string,
   fundId: string,
   edits: EditEventPayload[],
-): Promise<void> {
+): Promise<EditsResult> {
   let response: Response;
   try {
     response = await fetch(`${AGENT_API}/analyses/${analysisId}/edits`, {
@@ -113,6 +141,8 @@ export async function submitEdits(
     const body = await response.json().catch(() => null);
     throw new ApiError(body?.message ?? 'Could not record your corrections.', response.status);
   }
+
+  return response.json();
 }
 
 export type UploadedDocument = {

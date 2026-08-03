@@ -186,7 +186,9 @@ It stores whole dollars. The CalPERS page is headed "Dollars in Thousands", stat
 
 The browser never calls customer-system directly. It goes through agent-api, because a real integration carries per-customer credentials and those belong server-side for the same reason the Anthropic key does.
 
-Caveat worth stating once: it uses SQLite, which persists locally but not on Render, whose free tier has an ephemeral filesystem. Free Postgres would persist but expires after 30 days, which fails less honestly - someone opening this in a month would get connection errors and conclude the project is broken. Nothing in the build depends on data surviving a restart.
+On storage: it uses SQLite, and that choice is not one I would defend for a real system of record - which is the point. This is a stand-in for a database I don't own and wouldn't be building. A customer with this problem already has Postgres or Oracle or whatever their firm standardised on years ago, with backups, replicas and a DBA. What I needed was something that enforces real constraints so a write can genuinely be refused, and SQLite does that with no dependency and no server to run.
+
+It persists locally but not on Render, whose free tier has an ephemeral filesystem. Free Postgres would persist but expires after 30 days, which fails less honestly - someone opening this in a month would get connection errors and conclude the project is broken. Nothing in the build depends on data surviving a restart.
 
 
 16 - I did not design the hard part out of the fund list.
@@ -260,5 +262,22 @@ Each event carries a snapshot of the provenance - source text, page, confidence,
 Stored as one file per batch on the server for the same reason it's sent as one: splitting them per field would throw away the only evidence that they share a cause.
 
 
-Stack -
-Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.
+21 - The diagnosis gets the corrections and their provenance, not the documents.
+
+The Anthropic API is stateless. There is no session id and no server-side memory, so whatever the model should know has to be in the request. The question is what belongs there.
+
+I send the corrections, the provenance we snapshotted when each was captured - the line it quoted, the page, its own stated reasoning, its confidence - and the customer's field definitions. I do not re-attach the documents.
+
+Why not: the question is why a value was wrong, and the model already told us what it read and why. Handing it the pages again invites it to re-extract and re-derive rather than examine its own reasoning, and costs the tokens of a second extraction to do it. For a units mistake the provenance is more than enough - the ratio between the two values is exactly a thousand and the analyst's figure matches the printed one, which is the whole diagnosis. If wrong-column cases turn out to need the page, attaching it is a few lines and prompt caching would make it cheap.
+
+The lessons come back with a type and a scope, and the scope is the part that matters. Type is interesting; scope is consequential. "This applies to every document from every fund" is a much bigger claim than "this once", and it is what the analyst is really being asked to ratify - so the card states it in full rather than as a one-word tag, and the card is coloured by scope rather than by type.
+
+The prompt pushes for the narrowest scope that fits, and says explicitly that proposing a rule for a typo is worse than proposing nothing. A wrong rule gets applied to every future document; a missing one costs one correction.
+
+Lesson ids are assigned by us, not asked of the model. An accept has to name exactly one lesson, and a model inventing identifiers is a way to get collisions and dangling references for no benefit.
+
+The reject comment is a textarea on the card it refutes, not the chat composer. Typed loose into the chat, a correction would have to be matched back to a proposal by guessing which one it referred to - which is the exact ambiguity this whole feature exists to remove. Same reasoning as decision 8.
+
+A failed diagnosis does not lose the corrections. They are stored before the model is called, and a malformed or unreachable answer degrades to "recorded, but I could not work out why" rather than a 500 that would make a successful write look like a failure.
+
+Nothing is durable yet. Accepting a lesson records the decision and nothing more - persisting it, and applying it to the next extraction, is step 11.

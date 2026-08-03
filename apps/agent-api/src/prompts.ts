@@ -48,3 +48,64 @@ Quote the source line verbatim and give the page it appeared on, so the analyst 
 Write the summary in plain prose. No markdown, no asterisks, no bullet points.`;
 }
 
+
+/**
+ * Asks the model to explain its own corrections.
+ *
+ * The documents are deliberately not attached. The question is why a value was
+ * wrong, and the model already told us what it read and why — handing it the
+ * pages again invites it to re-extract rather than examine its own reasoning,
+ * and costs the tokens of a second extraction to do so.
+ *
+ * The whole batch goes in one prompt because corrections made together usually
+ * share a cause. Asked one at a time the model can only ever find coincidences.
+ */
+export function diagnosisPrompt(
+  fundName: string,
+  fields: FieldDefinition[],
+  edits: {
+    fieldKey: string;
+    from: string;
+    to: string;
+    context: { sourceText: string; sourcePage: number | null; confidence: string; reasoning: string };
+  }[],
+): string {
+  const byKey = new Map(fields.map((f) => [f.key, f]));
+
+  const corrections = edits
+    .map((edit) => {
+      const definition = byKey.get(edit.fieldKey);
+      return [
+        `- ${edit.fieldKey} (${definition?.label ?? 'unknown field'})`,
+        `    you extracted: ${edit.from === '' ? 'nothing' : edit.from}`,
+        `    analyst set it to: ${edit.to === '' ? 'nothing' : edit.to}`,
+        `    you quoted: ${edit.context.sourceText || '(no source line)'}`,
+        `    from page: ${edit.context.sourcePage ?? 'unknown'}`,
+        `    your reasoning was: ${edit.context.reasoning}`,
+        `    your confidence was: ${edit.context.confidence}`,
+      ].join('\n');
+    })
+    .join('\n\n');
+
+  return `You extracted values from a financial report for ${fundName}. An analyst reviewed your work and corrected some of it. Work out why.
+
+${corrections}
+
+An edit tells you what changed but not why, and the difference matters enormously. The same correction could be:
+
+- a one-off slip, where there is nothing to learn
+- a value read from the wrong table, column or row
+- a units problem, where the figure was right and the scale was not
+- a concept confusion, where you extracted a different concept than the field asks for
+- a label you did not recognise as this field
+
+The first affects nothing. The last four change how you should read future documents, and one of them changes how you read every document from every fund. So say which you think it was, and how far it should reach.
+
+Group corrections that share a cause into one lesson. Several fields all moved by the same factor is one mistake about units, not several mistakes about several fields — and saying so is more useful than listing them separately.
+
+Choose the narrowest scope that fits. "Every document from every fund" is a strong claim and should be rare; it is for things true of financial reporting generally, not for one issuer's habits. If a correction is genuinely just a slip, say so and use scope none — proposing a rule for a typo is worse than proposing nothing, because a wrong rule gets applied to every future document.
+
+You are proposing, not deciding. The analyst will confirm or correct each one, so say what you actually think rather than hedging into something safe and useless. If you cannot tell why a value changed, say that plainly in the explanation and use low confidence.
+
+Write in plain prose. No markdown, no asterisks, no bullet points.`;
+}

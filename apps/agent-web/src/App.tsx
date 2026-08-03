@@ -49,6 +49,7 @@ export default function App() {
       fields: [],
       edits: {},
       editEvents: [],
+      lessons: [],
       fiscalYearEnd: '',
       writeProblems: {},
     };
@@ -240,10 +241,26 @@ export default function App() {
       const corrections = analysis.editEvents;
       if (corrections.length > 0) {
         try {
-          await submitEdits(analysis.id, analysis.fundId, corrections);
+          const result = await submitEdits(analysis.id, analysis.fundId, corrections);
+
+          if (result.diagnosis) {
+            update(analysis.id, (a) => ({ ...a, lessons: result.diagnosis!.lessons }));
+            append(analysis.id, [message('agent', result.diagnosis.summary)]);
+          } else if (result.error) {
+            // The corrections are stored either way. Saying the write failed
+            // would be wrong, and saying nothing would leave the analyst
+            // wondering why nothing was asked about their edits.
+            append(analysis.id, [
+              {
+                ...message(
+                  'agent',
+                  `Your corrections were recorded, but I could not work out why they were needed. ${result.error.message}`,
+                ),
+                variant: 'error',
+              },
+            ]);
+          }
         } catch {
-          // The report is written; failing to record the corrections must not
-          // read as a failed write. Step 10 will surface this properly.
           append(analysis.id, [
             {
               ...message('agent', 'Your corrections could not be recorded for review.'),
@@ -280,6 +297,25 @@ export default function App() {
     }
   }
 
+  /**
+   * Nothing becomes a rule without this. The decision is recorded against the
+   * lesson it belongs to, so that accepting one proposal never implies anything
+   * about the others in the same batch.
+   */
+  function decideLesson(
+    analysisId: string,
+    lessonId: string,
+    decision: 'accepted' | 'rejected',
+    comment?: string,
+  ) {
+    update(analysisId, (a) => ({
+      ...a,
+      lessons: a.lessons.map((lesson) =>
+        lesson.id === lessonId ? { ...lesson, decision, comment } : lesson,
+      ),
+    }));
+  }
+
   if (view.name === 'new') {
     return <NewAnalysis onStart={startAnalysis} onCancel={() => setView({ name: 'list' })} />;
   }
@@ -297,6 +333,8 @@ export default function App() {
           onPeriodChange={(fiscalYearEnd) =>
             update(analysis.id, (a) => ({ ...a, fiscalYearEnd }))
           }
+          onAcceptLesson={(id) => decideLesson(analysis.id, id, 'accepted')}
+          onRejectLesson={(id, comment) => decideLesson(analysis.id, id, 'rejected', comment)}
           onConfirm={() => confirm(analysis)}
           writing={writing}
           onBack={() => setView({ name: 'list' })}

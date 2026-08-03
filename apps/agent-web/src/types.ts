@@ -1,4 +1,4 @@
-import type { ReviewField } from './api';
+import type { Lesson, ReviewField } from './api';
 
 export type Fund = {
   id: string;
@@ -39,6 +39,13 @@ export type EditEvent = {
     confidence: string;
     reasoning: string;
   };
+};
+
+/** A proposed lesson, plus what the analyst decided about it. */
+export type ProposedLesson = Lesson & {
+  decision?: 'accepted' | 'rejected';
+  /** Why the analyst disagreed. Attached to the lesson it refutes, never loose. */
+  comment?: string;
 };
 
 export type ChatMessage = {
@@ -85,6 +92,12 @@ export type Analysis = {
    * what happened, and step 10 diagnoses the second not the first.
    */
   editEvents: EditEvent[];
+  /**
+   * Lessons the agent proposed after the corrections were submitted, with the
+   * analyst's decision on each. Nothing here is durable — a lesson only becomes
+   * a rule once it is accepted, which is step 11.
+   */
+  lessons: ProposedLesson[];
   /** The reporting period the values belong to. The analyst supplies it. */
   fiscalYearEnd: string;
   /**
