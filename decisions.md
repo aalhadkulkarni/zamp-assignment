@@ -120,5 +120,31 @@ There's no auth, so resolveTenant returns a fixed string. Every stored path alre
 Why now rather than when auth arrives - because retrofitting a tenant into storage paths means migrating data that's already on disk in the wrong shape. Doing it now costs one function and one path segment. Adding auth later means changing resolveTenant and nothing else.
 
 
+12 - The API key lives in agent-api and nowhere else.
+
+The browser never talks to Anthropic. It talks to agent-api, and agent-api talks to Anthropic.
+
+Why - a key in the frontend is a published key. Anything the bundle contains, a visitor can read; Vite compiles VITE_ variables into the JavaScript it serves, so there is no version of "put it in the frontend carefully" that works. This is most of the reason agent-api exists as a service rather than the page calling Anthropic directly.
+
+Locally the key sits in apps/agent-api/.env, which is gitignored. On Render it's an environment variable in the dashboard. There's a committed .env.example showing the names and no values.
+
+No dotenv dependency. Node 22 reads .env itself via process.loadEnvFile, and index.ts calls it inside a try/catch - in production the file doesn't exist because the platform supplies the environment directly.
+
+A missing key doesn't stop the service from starting. It logs a warning and /llm/* returns 503 saying exactly which variable is unset. Uploads don't need a key and keep working. I went back and forth on this - crashing at startup surfaces a misconfiguration immediately, which is the usual argument. But a service that won't boot tells you less than one that boots and names the missing variable, and it takes working functionality down with it.
+
+
+13 - Model choice and settings for the connectivity check.
+
+claude-opus-5, thinking disabled, effort low, 256 max tokens.
+
+Why - this endpoint sends a fixed trivial prompt and expects a fixed trivial answer. Its only job is to prove the integration works before anything depends on it. Paying for reasoning on "reply with pong" proves nothing the cheap version doesn't. Extraction in step 7 will want the opposite settings, and that's a separate call site.
+
+Not added here: server-side refusal fallbacks. They exist so a request the model declines gets retried on another model, which matters for real document content and not at all for a hardcoded ping. It goes in with extraction, where a refusal is a plausible outcome.
+
+Refusals are handled even so, because they aren't errors. A declined request returns HTTP 200 with an empty response body and stop_reason "refusal". Code that reads the first content block without checking gets an empty string and reports success. So the check is explicit, and the route returns 422 rather than folding it into a generic 502 - the call worked, the model declined, and those are different things to debug.
+
+The route separates upstream failures too. A rejected key is 502, not 401 - our credential is broken, not the caller's, and returning 401 would tell an analyst to log in again when the problem is on our side.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

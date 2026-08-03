@@ -1,7 +1,9 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
-import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
+import Anthropic from '@anthropic-ai/sdk';
+import { MissingApiKeyError, RefusedError, ask } from './anthropic.js';
+import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD, MAX_PROMPT_LENGTH } from './config.js';
 import {
   isValidAnalysisId,
   storeUpload,
@@ -20,6 +22,62 @@ export async function buildApp() {
   });
 
   app.get('/health', async () => ({ ok: true, service: 'agent-api' }));
+
+  /**
+   * Proves the Anthropic integration works, with no documents involved. Keeping
+   * it separate from extraction means that when extraction misbehaves later, we
+   * can tell a broken model call apart from a bad prompt.
+   */
+  app.post<{ Body?: { prompt?: string } }>('/llm/ping', async (request, reply) => {
+    const prompt = request.body?.prompt?.trim() || 'Reply with exactly: pong';
+
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return reply.code(400).send({
+        error: 'InvalidPrompt',
+        message: `Prompt exceeds ${MAX_PROMPT_LENGTH} characters.`,
+      });
+    }
+
+    try {
+      return await ask(prompt);
+    } catch (error) {
+      // The key is missing rather than wrong. Say so plainly — this is the
+      // failure a new developer hits on their first run.
+      if (error instanceof MissingApiKeyError) {
+        return reply.code(503).send({
+          error: 'NotConfigured',
+          message: 'ANTHROPIC_API_KEY is not set on the server.',
+        });
+      }
+      if (error instanceof RefusedError) {
+        return reply.code(422).send({
+          error: 'ModelRefused',
+          message: error.message,
+          category: error.category,
+        });
+      }
+      if (error instanceof Anthropic.AuthenticationError) {
+        // Ours is the broken credential, not the caller's — hence 502, not 401.
+        return reply.code(502).send({
+          error: 'UpstreamAuthFailed',
+          message: 'The server\'s Anthropic credentials were rejected.',
+        });
+      }
+      if (error instanceof Anthropic.RateLimitError) {
+        return reply.code(429).send({
+          error: 'RateLimited',
+          message: 'Anthropic rate limit reached. Try again shortly.',
+        });
+      }
+      if (error instanceof Anthropic.APIError) {
+        return reply.code(502).send({
+          error: 'UpstreamError',
+          message: `Anthropic returned ${error.status}.`,
+        });
+      }
+      throw error;
+    }
+  });
 
   app.post<{ Params: { analysisId: string } }>(
     '/analyses/:analysisId/documents',
