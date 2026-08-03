@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ApiError, uploadDocuments } from './api';
 import AnalysisList from './components/AnalysisList';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
@@ -44,33 +45,49 @@ export default function App() {
     setView({ name: 'analysis', id: analysis.id });
   }
 
-  /**
-   * Slice 1 stops here: we confirm what we received and send nothing anywhere.
-   * The upload request replaces the confirmation in the next slice.
-   */
-  function send(analysisId: string, text: string, files: File[]) {
-    const attachments = files.map((f) => ({ name: f.name, size: f.size }));
-    const received = files
-      .map((f) => `${f.name} (${formatBytes(f.size)})`)
-      .join(', ');
-
-    const analystMessage: ChatMessage = {
-      ...message('analyst', text),
-      attachments,
-    };
-    const agentMessage = message(
-      'agent',
-      `Received ${files.length} ${files.length === 1 ? 'document' : 'documents'}: ${received}. ` +
-        'Nothing has been sent to the server yet.',
-    );
-
+  function append(analysisId: string, added: ChatMessage[]) {
     setAnalyses((current) =>
       current.map((a) =>
-        a.id === analysisId
-          ? { ...a, messages: [...a.messages, analystMessage, agentMessage] }
-          : a,
+        a.id === analysisId ? { ...a, messages: [...a.messages, ...added] } : a,
       ),
     );
+  }
+
+  /**
+   * Nothing is written to the log until the upload comes back. On failure the
+   * only new message is the error, and the composer keeps the documents, so
+   * retrying does not leave a half-sent message behind.
+   */
+  async function send(analysisId: string, text: string, files: File[]): Promise<boolean> {
+    try {
+      const result = await uploadDocuments(analysisId, files, text);
+      const received = result.documents
+        .map((d) => `${d.filename} (${formatBytes(d.size)})`)
+        .join(', ');
+
+      append(analysisId, [
+        {
+          ...message('analyst', text),
+          attachments: files.map((f) => ({ name: f.name, size: f.size })),
+        },
+        message(
+          'agent',
+          `Stored ${result.documents.length} ` +
+            `${result.documents.length === 1 ? 'document' : 'documents'}: ${received}. ` +
+            'Extraction comes next.',
+        ),
+      ]);
+      return true;
+    } catch (error) {
+      const detail =
+        error instanceof ApiError && error.rejected?.length
+          ? ` ${error.rejected.map((r) => `${r.filename}: ${r.reason}`).join('; ')}`
+          : '';
+      const text = error instanceof ApiError ? error.message : 'Upload failed.';
+
+      append(analysisId, [{ ...message('agent', text + detail), variant: 'error' }]);
+      return false;
+    }
   }
 
   if (view.name === 'new') {

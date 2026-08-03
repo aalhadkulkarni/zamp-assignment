@@ -16,7 +16,10 @@ export default function ChatPanel({ messages }: Props) {
   return (
     <div className="chat-log" role="log" aria-label="Conversation">
       {messages.map((message) => (
-        <article key={message.id} className={`message message-${message.author}`}>
+        <article
+          key={message.id}
+          className={`message message-${message.author}${message.variant === 'error' ? ' message-error' : ''}`}
+        >
           <div className="message-author">
             {message.author === 'agent' ? 'Agent' : 'You'}
           </div>

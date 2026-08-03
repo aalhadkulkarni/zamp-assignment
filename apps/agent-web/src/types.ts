@@ -20,6 +20,8 @@ export type ChatMessage = {
   author: 'agent' | 'analyst';
   text: string;
   attachments?: { name: string; size: number }[];
+  /** Failures are shown in the log rather than swallowed or put in an alert. */
+  variant?: 'error';
 };
 
 export type Analysis = {

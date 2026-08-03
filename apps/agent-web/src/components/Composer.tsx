@@ -3,13 +3,16 @@ import { ACCEPTED_EXTENSIONS, formatBytes, isDuplicate, stageFile } from '../fil
 import type { StagedFile } from '../types';
 
 type Props = {
-  onSend: (text: string, files: File[]) => void;
+  /** Resolves true when the upload succeeded. On false the composer keeps its
+   *  contents so the analyst can fix the problem and try again. */
+  onSend: (text: string, files: File[]) => Promise<boolean>;
 };
 
 export default function Composer({ onSend }: Props) {
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [text, setText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const ready = staged.filter((s) => s.status === 'ready');
@@ -38,14 +41,21 @@ export default function Composer({ onSend }: Props) {
     setStaged((current) => current.filter((s) => s.id !== id));
   }
 
-  function send() {
-    if (!canSend) return;
-    onSend(
-      text.trim(),
-      ready.map((s) => s.file),
-    );
-    setStaged([]);
-    setText('');
+  async function send() {
+    if (!canSend || isSending) return;
+    setIsSending(true);
+    try {
+      const sent = await onSend(
+        text.trim(),
+        ready.map((s) => s.file),
+      );
+      if (sent) {
+        setStaged([]);
+        setText('');
+      }
+    } finally {
+      setIsSending(false);
+    }
   }
 
   return (
@@ -120,10 +130,10 @@ export default function Composer({ onSend }: Props) {
         <button
           className="primary"
           onClick={send}
-          disabled={!canSend}
+          disabled={!canSend || isSending}
           aria-describedby={!canSend && text.trim() !== '' ? 'send-hint' : undefined}
         >
-          Send
+          {isSending ? 'Sending…' : 'Send'}
         </button>
       </div>
     </div>

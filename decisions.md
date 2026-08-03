@@ -91,5 +91,34 @@ This also means adding documents later is a first-class thing, not an edge case.
 Where this loosens - step 10, rejecting a hypothesis. When the agent proposes a reason for an edit and the analyst says it's wrong, the correction is prose and there's no document attached to it. That input belongs on the hypothesis itself, not in a general message box, so that the explanation is structurally tied to the hypothesis it refutes. Working out which hypothesis a loose message referred to is the same guessing problem this project exists to avoid, and I'm not going to reintroduce it in the chrome.
 
 
+9 - The browser's file checks are for the analyst. The server's are the real ones.
+
+Both sides check the same three things - extension, size, not empty - and the duplication is deliberate. The browser copy exists so the analyst finds out immediately, in the composer, next to the file. The server copy exists because anything can post to that endpoint and the browser rules are advice, not enforcement. I didn't factor them into a shared package. Two short lists that happen to agree today is a smaller problem than a shared package that makes the server's rules feel like a formality.
+
+The server also rejects the whole upload if any single document is unacceptable, rather than storing the good ones. Our UI can't produce that request - it won't let you send a file it rejected - so a mixed upload means the caller isn't our UI, and at that point storing part of what they sent is guessing at what they wanted.
+
+Added @fastify/multipart for parsing. Multipart is not something to hand-roll: boundary parsing, streaming, and per-file limits are exactly where a naive implementation goes wrong. The alternative was base64 in a JSON body, which inflates the payload by a third and buffers every file in memory before any of it can be checked. The plugin enforces the size and count limits during parsing, so an oversized upload is cut off rather than fully received and then refused.
+
+The analysis id is in the URL and lands in a filesystem path, so it has to be a uuid or the request is refused outright. Uploaded filenames are stripped to their basename before they touch disk, and the bytes are written under a generated id with the original name only as a label. A file called ../../etc/passwd.pdf stores fine and stores harmlessly.
+
+
+10 - Documents go to local disk, and that is not the final answer.
+
+Files are written under DATA_DIR/tenant/analysis, with a manifest json per upload recording the prompt and what was stored. The manifest is written after the documents, so a directory with a manifest is known to be complete.
+
+On Render this disk is ephemeral - a redeploy or a restart wipes it. I'm accepting that for now because documents are input to an extraction that runs immediately after upload, not a record anyone is relying on us to keep. What has to survive is the lessons, and those aren't files.
+
+Where it breaks: resuming an old analysis after a restart. When that matters this becomes object storage, and only the storage module changes, because nothing above it knows where the bytes are.
+
+Deliberately not built: a storage interface with a filesystem implementation behind it. There's one implementation and one caller. An interface here would be design for a second implementation that doesn't exist yet.
+
+
+11 - tenantId is threaded through now, resolved from a constant.
+
+There's no auth, so resolveTenant returns a fixed string. Every stored path already includes it.
+
+Why now rather than when auth arrives - because retrofitting a tenant into storage paths means migrating data that's already on disk in the wrong shape. Doing it now costs one function and one path segment. Adding auth later means changing resolveTenant and nothing else.
+
+
 Stack -
 Node/TS for the backend service. Vite with typescript. Render + Vercel for hosting.

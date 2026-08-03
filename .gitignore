@@ -4,3 +4,6 @@ dist
 .env.local
 test-results
 playwright-report
+
+# Uploaded documents
+.data

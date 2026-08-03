@@ -4,7 +4,7 @@ import type { Analysis } from '../types';
 
 type Props = {
   analysis: Analysis;
-  onSend: (text: string, files: File[]) => void;
+  onSend: (text: string, files: File[]) => Promise<boolean>;
   onBack: () => void;
 };
 

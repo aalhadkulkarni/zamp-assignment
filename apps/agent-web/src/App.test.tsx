@@ -1,9 +1,32 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
+import { ApiError, uploadDocuments } from './api';
 import { MAX_FILE_BYTES } from './files';
 import { FUNDS } from './funds';
+
+vi.mock('./api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./api')>()),
+  uploadDocuments: vi.fn(),
+}));
+
+const mockUpload = vi.mocked(uploadDocuments);
+
+/** Echoes back what the real endpoint returns for an accepted upload. */
+function accepts() {
+  mockUpload.mockImplementation(async (analysisId, files, prompt) => ({
+    uploadId: 'upload-1',
+    analysisId,
+    prompt,
+    documents: files.map((f, i) => ({ id: `doc-${i}`, filename: f.name, size: f.size })),
+  }));
+}
+
+beforeEach(() => {
+  mockUpload.mockReset();
+  accepts();
+});
 
 function pdf(name: string, bytes = 2048): File {
   return new File([new Uint8Array(bytes)], name, { type: 'application/pdf' });
@@ -123,7 +146,7 @@ describe('staging documents', () => {
 });
 
 describe('sending', () => {
-  it('confirms every document received, with its size', async () => {
+  it('confirms what the server stored, with sizes', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
 
@@ -135,11 +158,13 @@ describe('sending', () => {
 
     const log = screen.getByRole('log');
     expect(
-      within(log).getByText(/Received 2 documents: page-4\.pdf \(2 KB\), page-5\.pdf \(4 KB\)/),
+      await within(log).findByText(
+        /Stored 2 documents: page-4\.pdf \(2 KB\), page-5\.pdf \(4 KB\)/,
+      ),
     ).toBeInTheDocument();
   });
 
-  it('sends the typed context along with the documents', async () => {
+  it('posts the documents and the typed context to the analysis being viewed', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
 
@@ -147,7 +172,27 @@ describe('sending', () => {
     await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(screen.getByText('use the table on page 4')).toBeInTheDocument();
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledOnce());
+    const [analysisId, files, prompt] = mockUpload.mock.calls[0];
+    expect(analysisId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(files.map((f) => f.name)).toEqual(['acfr.pdf']);
+    expect(prompt).toBe('use the table on page 4');
+
+    expect(await screen.findByText('use the table on page 4')).toBeInTheDocument();
+  });
+
+  it('never sends a file the browser rejected', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    await user.upload(screen.getByLabelText(/Choose documents/), [
+      pdf('good.pdf'),
+      pdf('huge.pdf', MAX_FILE_BYTES + 1),
+    ]);
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect(mockUpload).toHaveBeenCalledOnce());
+    expect(mockUpload.mock.calls[0][1].map((f) => f.name)).toEqual(['good.pdf']);
   });
 
   /**
@@ -191,7 +236,64 @@ describe('sending', () => {
     await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(screen.getByLabelText('Additional context')).toHaveValue('');
+    await waitFor(() => expect(screen.getByLabelText('Additional context')).toHaveValue(''));
     expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+  });
+});
+
+describe('when the upload is refused', () => {
+  async function sendAgainst(rejection: ApiError) {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    mockUpload.mockRejectedValue(rejection);
+
+    await user.type(screen.getByLabelText('Additional context'), 'in thousands');
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    return user;
+  }
+
+  it("shows the server's reason rather than a generic failure", async () => {
+    await sendAgainst(new ApiError('At most 10 documents per upload.', 413));
+
+    expect(await screen.findByText(/At most 10 documents per upload/)).toBeInTheDocument();
+  });
+
+  it('names each document the server refused, and why', async () => {
+    await sendAgainst(
+      new ApiError('No documents were stored.', 400, [
+        { filename: 'bad.docx', reason: 'Unsupported file type' },
+      ]),
+    );
+
+    expect(await screen.findByText(/bad\.docx: Unsupported file type/)).toBeInTheDocument();
+  });
+
+  it('keeps the documents and the text so the analyst can retry', async () => {
+    await sendAgainst(new ApiError('Could not reach the server.', 0));
+
+    expect(await screen.findByText(/Could not reach the server/)).toBeInTheDocument();
+    expect(screen.getByText('acfr.pdf')).toBeInTheDocument();
+    expect(screen.getByLabelText('Additional context')).toHaveValue('in thousands');
+    expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
+  });
+
+  it('does not put the analyst message in the log for a message that never landed', async () => {
+    await sendAgainst(new ApiError('Could not reach the server.', 0));
+
+    const log = screen.getByRole('log');
+    await screen.findByText(/Could not reach the server/);
+    expect(within(log).queryByText('in thousands')).not.toBeInTheDocument();
+  });
+
+  it('lets a retry succeed after the problem is fixed', async () => {
+    const user = await sendAgainst(new ApiError('Could not reach the server.', 0));
+    await screen.findByText(/Could not reach the server/);
+
+    accepts();
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText(/Stored 1 document: acfr\.pdf/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Additional context')).toHaveValue('');
   });
 });

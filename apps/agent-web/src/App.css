@@ -184,6 +184,12 @@
   border-radius: 10px;
 }
 
+.message-error .message-text {
+  color: var(--danger);
+  background: var(--danger-bg);
+  border-color: var(--danger);
+}
+
 .message-attachments {
   list-style: none;
   margin: 8px 0 0;
