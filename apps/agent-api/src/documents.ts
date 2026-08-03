@@ -106,3 +106,49 @@ export async function storeUpload(
 
   return { uploadId, stored };
 }
+
+/**
+ * One correction the analyst made, with the provenance of the value they
+ * corrected. The whole batch is what step 10 diagnoses.
+ */
+export type EditEvent = {
+  id: string;
+  fieldKey: string;
+  from: string;
+  to: string;
+  at: string;
+  context: {
+    sourceText: string;
+    sourcePage: number | null;
+    confidence: string;
+    reasoning: string;
+  };
+};
+
+/**
+ * Corrections are stored as one batch, not one file per field. They arrive
+ * together because they were made together, and that grouping is the signal:
+ * five fields corrected by the same factor is one mistake about units, and
+ * splitting them across files would throw away the only evidence of that.
+ */
+export async function storeEdits(
+  tenantId: string,
+  analysisId: string,
+  fundId: string,
+  edits: EditEvent[],
+): Promise<string> {
+  const batchId = crypto.randomUUID();
+  const dir = uploadDir(tenantId, analysisId);
+  await mkdir(dir, { recursive: true });
+
+  await writeFile(
+    join(dir, `edits-${batchId}.json`),
+    JSON.stringify(
+      { batchId, tenantId, analysisId, fundId, edits, submittedAt: new Date().toISOString() },
+      null,
+      2,
+    ),
+  );
+
+  return batchId;
+}

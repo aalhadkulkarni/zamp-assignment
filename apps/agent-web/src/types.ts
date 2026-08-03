@@ -46,12 +46,8 @@ export type ChatMessage = {
   author: 'agent' | 'analyst';
   text: string;
   attachments?: { name: string; size: number }[];
-  /**
-   * 'error' for failures, shown in the log rather than swallowed into an alert.
-   * 'edit' for a captured correction — the line step 10 will attach a proposed
-   * diagnosis to.
-   */
-  variant?: 'error' | 'edit';
+  /** Failures are shown in the log rather than swallowed into an alert. */
+  variant?: 'error';
   /** Marks a reply that came from a recording, so a demo cannot mislead. */
   fixture?: boolean;
 };

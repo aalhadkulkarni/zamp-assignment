@@ -7,6 +7,7 @@ import {
   WriteRejected,
   listFunds,
   uploadDocuments,
+  submitEdits,
   writeReport,
   type ReviewField,
   type UploadResult,
@@ -18,11 +19,13 @@ vi.mock('./api', async (importOriginal) => ({
   uploadDocuments: vi.fn(),
   listFunds: vi.fn(),
   writeReport: vi.fn(),
+  submitEdits: vi.fn(),
 }));
 
 const mockUpload = vi.mocked(uploadDocuments);
 const mockListFunds = vi.mocked(listFunds);
 const mockWrite = vi.mocked(writeReport);
+const mockSubmitEdits = vi.mocked(submitEdits);
 
 /** Funds come from the customer's system now, so tests have to stand one in. */
 const FUNDS = [
@@ -87,6 +90,8 @@ beforeEach(() => {
   mockListFunds.mockResolvedValue(FUNDS);
   mockWrite.mockReset();
   mockWrite.mockResolvedValue(undefined);
+  mockSubmitEdits.mockReset();
+  mockSubmitEdits.mockResolvedValue(undefined);
   accepts();
 });
 
@@ -422,7 +427,7 @@ describe('sending', () => {
     });
   });
 
-  describe('capturing an edit', () => {
+  describe('pending corrections', () => {
     async function extracted() {
       const user = userEvent.setup();
       await startAnalysis(user);
@@ -432,85 +437,74 @@ describe('sending', () => {
       return user;
     }
 
-    const log = () => screen.getByRole('log');
+    const draft = () => screen.queryByRole('region', { name: 'Pending corrections' });
 
-    /** Captured on blur, not per keystroke — otherwise a figure is a dozen events. */
-    it('records the correction once the analyst leaves the field', async () => {
+    it('shows nothing until something is corrected', async () => {
+      await extracted();
+      expect(draft()).not.toBeInTheDocument();
+    });
+
+    /** Captured on blur, not per keystroke — a figure is not a dozen corrections. */
+    it('lists a correction once the analyst leaves the field', async () => {
       const user = await extracted();
       const value = screen.getByLabelText('total_investments value');
 
       await user.clear(value);
       await user.type(value, '999');
-      // Still typing: nothing captured yet.
-      expect(within(log()).queryByText(/changed from/)).not.toBeInTheDocument();
+      expect(draft()).not.toBeInTheDocument();
 
       await user.tab();
 
-      expect(
-        await within(log()).findByText('total_investments changed from 462090073000 to 999.'),
-      ).toBeInTheDocument();
-    });
-
-    it('records filling in a value the model never found', async () => {
-      const user = await extracted();
-
-      await user.type(screen.getByLabelText('total_receivables value'), '38456658000');
-      await user.tab();
-
-      expect(
-        await within(log()).findByText('total_receivables changed from blank to 38456658000.'),
-      ).toBeInTheDocument();
+      expect(await screen.findByText('1 correction — not yet submitted')).toBeInTheDocument();
+      expect(within(draft()!).getByText('462090073000 → 999')).toBeInTheDocument();
     });
 
     /**
-     * One correction is one fact. Capturing every attempt at the same field
-     * would send step 10 several diagnoses of a single mistake.
+     * The reason this is a draft rendered from state rather than lines appended
+     * to the log: changed, reverted, changed again is one correction, and only
+     * where it ended up matters.
      */
-    it('replaces the record when the same field is corrected again', async () => {
+    it('keeps one entry per field however many times it is changed', async () => {
       const user = await extracted();
       const value = screen.getByLabelText('total_investments value');
 
-      await user.clear(value);
-      await user.type(value, '111');
-      await user.tab();
-      await within(log()).findByText(/to 111\./);
+      for (const attempt of ['100', '462090073000', '200']) {
+        await user.clear(value);
+        await user.type(value, attempt);
+        await user.tab();
+      }
 
-      await user.clear(value);
-      await user.type(value, '222');
-      await user.tab();
-
-      expect(await within(log()).findByText(/to 222\./)).toBeInTheDocument();
-      // The earlier attempt is still in the log as history, but only the latest
-      // is a live correction — which is what step 10 will be given.
-      expect(screen.getByText('1 value corrected.')).toBeInTheDocument();
+      expect(await screen.findByText('1 correction — not yet submitted')).toBeInTheDocument();
+      expect(within(draft()!).getAllByText(/→/)).toHaveLength(1);
+      expect(within(draft()!).getByText('462090073000 → 200')).toBeInTheDocument();
     });
 
-    it('says so when a field goes back to what the model proposed', async () => {
+    it('drops the entry when a field goes back to what the model proposed', async () => {
       const user = await extracted();
       const value = screen.getByLabelText('total_investments value');
 
       await user.clear(value);
       await user.type(value, '999');
       await user.tab();
+      await screen.findByText('1 correction — not yet submitted');
 
       await user.clear(value);
       await user.type(value, '462090073000');
       await user.tab();
 
-      expect(
-        await within(log()).findByText('total_investments is back to the original value.'),
-      ).toBeInTheDocument();
-      expect(screen.getByText('Nothing changed yet.')).toBeInTheDocument();
+      await waitFor(() => expect(draft()).not.toBeInTheDocument());
     });
 
-    it('records nothing when the analyst leaves a field untouched', async () => {
+    it('counts corrections across fields in one block', async () => {
       const user = await extracted();
 
-      await user.click(screen.getByLabelText('total_investments value'));
+      await user.type(screen.getByLabelText('total_receivables value'), '38456658000');
+      await user.tab();
+      await user.clear(screen.getByLabelText('total_investments value'));
+      await user.type(screen.getByLabelText('total_investments value'), '462090073');
       await user.tab();
 
-      expect(within(log()).queryByText(/changed from/)).not.toBeInTheDocument();
-      expect(within(log()).queryByText(/back to the original/)).not.toBeInTheDocument();
+      expect(await screen.findByText('2 corrections — not yet submitted')).toBeInTheDocument();
     });
   });
 
@@ -552,6 +546,56 @@ describe('sending', () => {
       // A value the model never found is sent as empty, not omitted — their
       // schema decides whether a missing required field is acceptable.
       expect(values.total_receivables).toBe('');
+    });
+
+    /**
+     * One call with the whole batch. Corrections made together are usually one
+     * mistake seen from several angles, and asking about them separately would
+     * find coincidences instead of a cause.
+     */
+    it('submits every correction together, after the values are accepted', async () => {
+      const user = await reviewed();
+      await user.type(screen.getByLabelText('total_receivables value'), '38456658000');
+      await user.tab();
+      await user.clear(screen.getByLabelText('total_investments value'));
+      await user.type(screen.getByLabelText('total_investments value'), '462090073');
+      await user.tab();
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      await waitFor(() => expect(mockSubmitEdits).toHaveBeenCalledOnce());
+      const [, fundId, edits] = mockSubmitEdits.mock.calls[0];
+      expect(fundId).toBe(FUNDS[0].id);
+      expect(edits.map((e) => e.fieldKey).sort()).toEqual([
+        'total_investments',
+        'total_receivables',
+      ]);
+      // Provenance travels with the correction — step 10 needs it to explain why.
+      expect(edits[0].context).toHaveProperty('sourceText');
+    });
+
+    it('does not submit corrections when the write was refused', async () => {
+      const user = await reviewed();
+      await user.type(screen.getByLabelText('total_receivables value'), '1');
+      await user.tab();
+      mockWrite.mockRejectedValue(
+        new WriteRejected('The report was not stored.', 400, 'ValidationFailed', []),
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      await screen.findByText('The report was not stored.');
+      // Learning from a correction that was itself rejected would teach us the
+      // wrong thing.
+      expect(mockSubmitEdits).not.toHaveBeenCalled();
+    });
+
+    it('skips the call entirely when nothing was corrected', async () => {
+      const user = await reviewed();
+      await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+      await waitFor(() => expect(mockWrite).toHaveBeenCalledOnce());
+      expect(mockSubmitEdits).not.toHaveBeenCalled();
     });
 
     it('locks the analysis once the customer has accepted it', async () => {

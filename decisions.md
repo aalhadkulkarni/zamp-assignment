@@ -241,19 +241,23 @@ On success the analysis becomes read-only. Their database owns those values now,
 Deliberately deferred: the reporting period. It isn't in the extraction contract - the analyst picks it in the review footer. It's the customer's uniqueness key, so writing without it would be refused anyway and less clearly, which is why the button stays disabled until it's set. Having the model read the period off the document is the obvious next step, and it becomes another field with provenance rather than a special case.
 
 
-20 - An edit is captured when the analyst leaves the field, and one correction is one event.
+20 - Corrections are one batch, submitted together, with one entry per field.
 
 Captured on blur, not on change. Typing 462090073000 into a box fires eleven change events and none of them are a correction - they're a person part-way through typing a number.
 
-Re-editing the same field replaces its event rather than appending a second one. The question step 10 asks is "why was this value wrong", and a field the analyst tried three values in is still one mistake. Three events would produce three diagnoses of it. If they put the value back to what the model proposed, the event is removed entirely, because nothing is wrong with it any more.
+One entry per field, showing only where the value ended up. Change it to 100, put it back, change it to 200, and that is one correction to 200 - not three things that happened. The analyst doesn't care about their own false starts and neither does a diagnosis.
 
-The event's context - the source text, the page, the confidence, the model's reasoning - is snapshotted into the event rather than looked up later. A second upload replaces the fields the event came from, and an event that silently starts describing a different reading of a different document is worse than one that is merely old.
+Getting that right meant rendering the pending corrections from state rather than appending a line to the chat each time one was captured. That was the actual bug: a chat log is append-only history, pending corrections are mutable current state, and putting the second inside the first is what produced three lines for one correction. So there's a draft block between the log and the composer - not history, not an action, just what you have changed and not yet submitted.
 
-Edit events are kept separate from the edits map even though both describe the same corrections. They answer different questions: the map is what the table shows now, the event list is what happened and in what order. Step 10 diagnoses the second. Merging them would mean the audit record changing shape every time someone typed.
+The whole set goes to the server in one call when the analyst confirms, not field by field as they work.
 
-Captured edits appear in the chat as margin notes rather than agent messages, because the agent didn't say them. That's also where step 10 will hang the proposed diagnosis, so the correction and the explanation of it end up in the same place.
+Why batch: corrections made together are usually one mistake seen from several angles. Five values all changed by the same factor is a single misunderstanding about units, and asked about one at a time that pattern is invisible - step 10 would find five coincidences instead of a cause. This is the open question from earlier, and I'm settling it in favour of batching. The cost is losing the tight coupling between one edit and one question about it, which I think is the cheaper thing to give up: the analyst is still in the review when they confirm, so the context is fresh either way.
 
-Still open, deliberately: whether several edits made together should be diagnosed together. Six values all wrong by a factor of a thousand is one units mistake, not six - but batching costs the tight coupling between an edit and the question about it. Worth deciding against a real example rather than in the abstract.
+They're submitted only after the customer accepted the values. Learning from a correction that was itself rejected would teach us the wrong thing.
+
+Each event carries a snapshot of the provenance - source text, page, confidence, the model's reasoning - rather than a pointer to it. A second upload replaces the fields it came from, and an event that silently starts describing a different reading of a different document is worse than one that is merely old.
+
+Stored as one file per batch on the server for the same reason it's sent as one: splitting them per field would throw away the only evidence that they share a cause.
 
 
 Stack -

@@ -17,8 +17,19 @@ import {
   listFunds,
   type FieldDefinition,
 } from './customer.js';
+import {
+  isValidAnalysisId,
+  storeEdits,
+  storeUpload,
+  validateDocument,
+  validatePrompt,
+  type EditEvent,
+  type IncomingDocument,
+  type Rejection,
+} from './documents.js';
 import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
 import { extractionPrompt } from './prompts.js';
+import { resolveTenant } from './tenant.js';
 
 /**
  * Turns the text the analyst saw into what the customer's schema asks for.
@@ -64,15 +75,6 @@ type ExtractionResult = {
   usage: { inputTokens: number; outputTokens: number };
   fixture: boolean;
 };
-import {
-  isValidAnalysisId,
-  storeUpload,
-  validateDocument,
-  validatePrompt,
-  type IncomingDocument,
-  type Rejection,
-} from './documents.js';
-import { resolveTenant } from './tenant.js';
 
 export async function buildApp() {
   // Quiet under test, on everywhere else. Without this the warning logged when
@@ -139,6 +141,44 @@ export async function buildApp() {
       }
       throw error;
     }
+  });
+
+  /**
+   * The corrections an analyst made during review, submitted as one batch.
+   *
+   * A batch rather than one call per field, because corrections made together
+   * are usually one mistake seen from several angles. Five values all changed by
+   * the same factor is a single misunderstanding about units; asked about one at
+   * a time, that pattern is invisible and step 10 would find five coincidences
+   * instead of a cause.
+   *
+   * Stored only, for now. Step 10 turns the response into a proposed diagnosis.
+   */
+  app.post<{
+    Params: { analysisId: string };
+    Body: { fundId?: string; edits?: EditEvent[] };
+  }>('/analyses/:analysisId/edits', async (request, reply) => {
+    const { analysisId } = request.params;
+    if (!isValidAnalysisId(analysisId)) {
+      return reply
+        .code(400)
+        .send({ error: 'InvalidAnalysisId', message: 'Analysis id must be a uuid.' });
+    }
+
+    const { fundId, edits } = request.body ?? {};
+    if (!fundId || !Array.isArray(edits)) {
+      return reply
+        .code(400)
+        .send({ error: 'InvalidRequest', message: 'fundId and edits are required.' });
+    }
+
+    // Nothing to learn from. Not an error — the analyst simply agreed with us.
+    if (edits.length === 0) {
+      return reply.code(200).send({ batchId: null, received: 0 });
+    }
+
+    const batchId = await storeEdits(resolveTenant(request), analysisId, fundId, edits);
+    return reply.code(201).send({ batchId, received: edits.length });
   });
 
   app.post<{ Params: { analysisId: string } }>(

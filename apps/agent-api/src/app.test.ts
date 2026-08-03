@@ -577,3 +577,72 @@ describe('POST /analyses/:analysisId/report', () => {
     expect(createReport).not.toHaveBeenCalled();
   });
 });
+
+describe('POST /analyses/:analysisId/edits', () => {
+  const EDIT = {
+    id: 'edit-1',
+    fieldKey: 'total_investments',
+    from: '462090073000',
+    to: '462090073',
+    at: '2026-08-04T10:00:00.000Z',
+    context: {
+      sourceText: 'Total Investments $462,090,073',
+      sourcePage: 1,
+      confidence: 'high',
+      reasoning: 'PERF A column.',
+    },
+  };
+
+  async function submit(body: object, analysisId = ANALYSIS) {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/analyses/${analysisId}/edits`,
+      payload: body,
+    });
+    return { status: res.statusCode, body: res.json() };
+  }
+
+  it('stores the batch and says how many it took', async () => {
+    const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT, { ...EDIT, id: 'edit-2', fieldKey: 'net_position' }] });
+
+    expect(status).toBe(201);
+    expect(body).toEqual({ batchId: expect.any(String), received: 2 });
+  });
+
+  /**
+   * One file for the whole batch, not one per field. Corrections made together
+   * are the evidence that they share a cause — five values changed by the same
+   * factor is one mistake about units, and splitting them loses that.
+   */
+  it('writes the corrections as a single batch, with their provenance', async () => {
+    const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+    const stored = JSON.parse(
+      await readFile(join(uploadDir(TENANT, ANALYSIS), `edits-${body.batchId}.json`), 'utf8'),
+    );
+    expect(stored.fundId).toBe('calpers');
+    expect(stored.edits).toHaveLength(1);
+    expect(stored.edits[0].context.sourceText).toBe('Total Investments $462,090,073');
+    expect(stored.submittedAt).toEqual(expect.any(String));
+  });
+
+  /** The analyst agreeing with us is a normal outcome, not a failure. */
+  it('accepts an empty batch without writing anything', async () => {
+    const { status, body } = await submit({ fundId: 'calpers', edits: [] });
+
+    expect(status).toBe(200);
+    expect(body).toEqual({ batchId: null, received: 0 });
+    await expect(readdir(uploadDir(TENANT, ANALYSIS))).rejects.toThrow();
+  });
+
+  it('refuses an analysis id that could steer a filesystem path', async () => {
+    const { status } = await submit({ fundId: 'calpers', edits: [EDIT] }, 'not-a-uuid');
+    expect(status).toBe(400);
+  });
+
+  it('refuses a batch that does not say which fund it belongs to', async () => {
+    const { status, body } = await submit({ edits: [EDIT] });
+    expect(status).toBe(400);
+    expect(body.error).toBe('InvalidRequest');
+  });
+});

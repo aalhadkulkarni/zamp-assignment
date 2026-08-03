@@ -74,6 +74,47 @@ export async function writeReport(
   }
 }
 
+export type EditEventPayload = {
+  id: string;
+  fieldKey: string;
+  from: string;
+  to: string;
+  at: string;
+  context: {
+    sourceText: string;
+    sourcePage: number | null;
+    confidence: string;
+    reasoning: string;
+  };
+};
+
+/**
+ * The whole batch in one call. Corrections made together are usually one
+ * mistake seen from several angles, and sending them one at a time would hide
+ * the pattern that explains them.
+ */
+export async function submitEdits(
+  analysisId: string,
+  fundId: string,
+  edits: EditEventPayload[],
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_API}/analyses/${analysisId}/edits`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fundId, edits }),
+    });
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection.', 0);
+  }
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.message ?? 'Could not record your corrections.', response.status);
+  }
+}
+
 export type UploadedDocument = {
   id: string;
   /** As the analyst named it. */

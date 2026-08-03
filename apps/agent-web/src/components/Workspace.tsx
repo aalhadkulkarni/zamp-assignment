@@ -1,4 +1,5 @@
 import ChatPanel from './ChatPanel';
+import PendingEdits from './PendingEdits';
 import ReviewTable from './ReviewTable';
 import Composer from './Composer';
 import type { Analysis } from '../types';
@@ -42,6 +43,7 @@ export default function Workspace({
       <div className="workspace-body">
         <section className="chat" aria-label="Agent conversation">
           <ChatPanel messages={analysis.messages} />
+          {!approved && <PendingEdits edits={analysis.editEvents} />}
           <Composer onSend={onSend} />
         </section>
 

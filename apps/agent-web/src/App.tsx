@@ -2,6 +2,7 @@ import { useState } from 'react';
 import {
   ApiError,
   WriteRejected,
+  submitEdits,
   uploadDocuments,
   writeReport,
   type Fund,
@@ -72,9 +73,10 @@ export default function App() {
    * one fact — that they changed this value to that one — and capturing it per
    * keystroke would turn typing a figure into a dozen of them.
    *
-   * Re-editing the same field replaces its event rather than appending. The
-   * question step 10 asks is "why is this value wrong", and asking it once per
-   * attempt at the same field would produce several diagnoses of one mistake.
+   * One event per field, replaced rather than appended. A field the analyst
+   * tried three values in is one correction, and only where it ended up matters.
+   * Nothing is written to the chat log here: pending corrections are current
+   * state, and PendingEdits renders them from it.
    */
   function captureEdit(analysisId: string, key: string) {
     setAnalyses((current) =>
@@ -85,21 +87,9 @@ export default function App() {
         if (!field) return a;
 
         const others = a.editEvents.filter((e) => e.fieldKey !== key);
-        const had = a.editEvents.some((e) => e.fieldKey === key);
 
         // Back to what the model said: not a correction, so not an event.
-        if (!(key in a.edits)) {
-          return had
-            ? {
-                ...a,
-                editEvents: others,
-                messages: [
-                  ...a.messages,
-                  { ...message('agent', `${key} is back to the original value.`), variant: 'edit' as const },
-                ],
-              }
-            : { ...a, editEvents: others };
-        }
+        if (!(key in a.edits)) return { ...a, editEvents: others };
 
         const event: EditEvent = {
           id: crypto.randomUUID(),
@@ -115,22 +105,7 @@ export default function App() {
           },
         };
 
-        return {
-          ...a,
-          editEvents: [...others, event],
-          messages: [
-            ...a.messages,
-            {
-              ...message(
-                'agent',
-                `${key} changed from ${event.from === '' ? 'blank' : event.from} to ${
-                  event.to === '' ? 'blank' : event.to
-                }.`,
-              ),
-              variant: 'edit' as const,
-            },
-          ],
-        };
+        return { ...a, editEvents: [...others, event] };
       }),
     );
   }
@@ -260,12 +235,34 @@ export default function App() {
         valuesFor(analysis),
       );
 
+      // Corrections go out only after the values were accepted. Learning from a
+      // correction that was itself rejected would teach us the wrong thing.
+      const corrections = analysis.editEvents;
+      if (corrections.length > 0) {
+        try {
+          await submitEdits(analysis.id, analysis.fundId, corrections);
+        } catch {
+          // The report is written; failing to record the corrections must not
+          // read as a failed write. Step 10 will surface this properly.
+          append(analysis.id, [
+            {
+              ...message('agent', 'Your corrections could not be recorded for review.'),
+              variant: 'error',
+            },
+          ]);
+        }
+      }
+
       update(analysis.id, (a) => ({ ...a, status: 'approved', writeProblems: {} }));
       append(analysis.id, [
         message(
           'agent',
           `Written to the customer's system for the period ending ${analysis.fiscalYearEnd}. ` +
-            'This analysis is now read-only.',
+            'This analysis is now read-only.' +
+            (corrections.length > 0
+              ? ` You corrected ${corrections.length} value${corrections.length === 1 ? '' : 's'}: ` +
+                `${corrections.map((c) => c.fieldKey).join(', ')}.`
+              : ''),
         ),
       ]);
     } catch (error) {
