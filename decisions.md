@@ -468,6 +468,8 @@ A two-way check would have been wrong. Pension reports are hundreds of pages and
 
 On a mismatch nothing is extracted and nothing is stored. A value from the wrong fund is worse than no value, because a blank is obvious and a wrong number is not - the same reasoning as decision 12. The documents are kept, because the analyst may well be right and we should not make them pick the files again to argue.
 
-The recorded reply exercises the path too, by reading the filename. There is no letterhead in a buffer of zeroes, so the name stands in for one - enough that uploading calstrs-2024.pdf to a CalPERS analysis demonstrates the whole refusal without an API key.
+The recorded reply always answers cannot_tell, which is the honest answer for something that has not read anything. I first had it guess from the filename so the refusal could be demonstrated without an API key, and that was a mistake worth recording: real documents are called financial_detail_4471.pdf, and code that treats a filename as evidence of which fund a document belongs to teaches the wrong thing to whoever reads it next. Whose document this is can only be decided by reading it. The mismatch path is covered by tests that stub the model's answer directly, and by real calls.
+
+The filename is still sent to the model as the document's title, because that is ordinary metadata and a real system would send it. That means a misleadingly named file can influence the model's judgement - which is the model weighing evidence, not a rule of ours, and is the right place for it.
 
 What is not built: overruling is a sentence in the chat that nothing acts on. Sending the same documents again produces the same refusal. The honest version is a "read them anyway" the analyst can click, and it is listed rather than built.

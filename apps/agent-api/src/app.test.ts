@@ -1788,15 +1788,18 @@ describe('checking the document is for this fund', () => {
     expect(analysis.extraction.state).toBe('idle');
   });
 
-  /** A recorded reply has to exercise the path too, or the demo cannot show it. */
-  it('the recording refuses a file named for another fund', async () => {
+  /**
+   * The recording never claims to know. It has not read anything, so it is in no
+   * position to say whose document this is — and a filename is not evidence:
+   * these are called financial_detail_4471.pdf in the real world.
+   */
+  it('the recording says it cannot tell, whatever the file is called', async () => {
     process.env.USE_FIXTURES = 'true';
 
-    const wrong = await upload([pdf('calstrs-2024.pdf')]);
-    expect(wrong.analysis.fields).toEqual([]);
-    expect(lastAgentMessage(wrong.analysis)?.text).toContain('CALSTRS');
-
-    const right = await upload([pdf('calpers-2024.pdf')]);
-    expect(right.analysis.fields).toHaveLength(5);
+    for (const name of ['calstrs-2024.pdf', 'financial_detail_4471.pdf', 'acfr.pdf']) {
+      const { analysis } = await upload([pdf(name)]);
+      expect(analysis.extraction).toEqual({ state: 'idle', error: null });
+      expect(analysis.fields).toHaveLength(5);
+    }
   });
 });

@@ -218,37 +218,10 @@ export async function extract(
  */
 export async function extractFixture(
   prompt: string,
-  attachments: Attachment[],
+  _attachments: Attachment[],
   schema: Record<string, unknown>,
 ): Promise<ExtractionReply> {
   await sleep(fixtureDelayMs());
-
-  // Reading the filename is how the recording can disagree with the analyst.
-  // A real model reads the letterhead; there isn't one in a buffer of zeroes,
-  // so the name stands in for it — enough to exercise the whole mismatch path
-  // by uploading something called calstrs-2024.pdf to a CalPERS analysis.
-  const askedFor = /working on ([^.]+)\./.exec(prompt)?.[1] ?? '';
-  const named = attachments.map((a) => a.filename.toLowerCase()).join(' ');
-  const elsewhere = ['calstrs', 'nyslrs', 'texas', 'florida', 'ohio'].find(
-    (fund) => named.includes(fund) && !askedFor.toLowerCase().includes(fund),
-  );
-
-  if (elsewhere) {
-    return {
-      model: 'claude-opus-5',
-      fixture: true,
-      usage: { inputTokens: 3_100, outputTokens: 120 },
-      extraction: {
-        document: {
-          describes: elsewhere.toUpperCase(),
-          verdict: 'mismatch',
-          reasoning: `The heading on the first page names ${elsewhere.toUpperCase()}.`,
-        },
-        summary: 'I have not read any figures out of these pages.',
-        fields: {},
-      },
-    };
-  }
 
   const taught = describedFields(schema);
 
@@ -273,9 +246,18 @@ export async function extractFixture(
     usage: { inputTokens: 24_180, outputTokens: 742 },
     extraction: {
       document: {
-        describes: `${askedFor || 'the fund named in this analysis'}, statement of fiduciary net position`,
-        // Nothing on a mid-document statement page names the issuer, which is
-        // the common case and is not a problem.
+        describes: 'a statement of fiduciary net position, issuer not named on these pages',
+        // Always cannot_tell, and it is the honest answer: a recording has not
+        // read anything, so it is in no position to say whose document this is.
+        //
+        // An earlier version guessed from the filename, which was worse than
+        // useless — real documents are called financial_detail_4471.pdf, and
+        // code that treats a filename as evidence of identity teaches the wrong
+        // thing to whoever reads it next. Whose document this is can only be
+        // decided by reading it, which is what the real call does.
+        //
+        // The mismatch and matches paths are covered in app.test.ts, which stubs
+        // the model's answer directly rather than inventing a signal for it.
         verdict: 'cannot_tell',
         reasoning:
           'These pages carry the statement itself with no letterhead or plan title, so nothing on them identifies the issuer either way.',

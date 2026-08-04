@@ -95,6 +95,13 @@ Still **open**: overruling is a sentence in the chat, and nothing acts on it —
 re-sending the same documents produces the same refusal. A one-click "read them
 anyway" is the missing half.
 
+Also **open**: the filename is sent to the model as the document's title, so a
+file named for the wrong fund could sway its verdict. That is the model weighing
+evidence rather than a rule of ours, which is the right place for it — but it
+means a misleading name is not neutral. Nothing in the server infers fund
+identity from a filename, and nothing should: these arrive called
+`financial_detail_4471.pdf`.
+
 ---
 
 ## 2. Extraction
