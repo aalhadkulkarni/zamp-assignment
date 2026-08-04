@@ -1,0 +1,13 @@
+{
+  // The build excludes tests because tsc emits to dist and test files must not
+  // ship. That left them typechecked by nothing — editors flagged errors the
+  // command line could not see. This config is the build's settings with tests
+  // put back and no output.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "vitest/globals"]
+  },
+  "include": ["src"],
+  "exclude": []
+}

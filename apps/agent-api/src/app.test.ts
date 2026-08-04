@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+
 import { buildApp } from './app.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
 import { getPool } from './db.js';
@@ -135,6 +136,20 @@ const EXTRACTION = {
     },
   },
 };
+
+/**
+ * The arguments the SDK was called with most recently. `.at(-1)` is typed as
+ * possibly undefined, which is true in general and never true here — every
+ * caller has just made the call it is asking about.
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any -- the SDK is stubbed here;
+   the assertions in each test are the check, and modelling the request shape
+   would be friction that catches nothing. */
+function lastCall(): { messages: any; output_config: any } {
+  const call = create.mock.calls.at(-1);
+  if (!call) throw new Error('The model was never called.');
+  return call[0];
+}
 
 function pdf(name: string, size = 64): File {
   return new File([new Uint8Array(size)], name, { type: 'application/pdf' });
@@ -916,7 +931,7 @@ describe('applying what was learned', () => {
       analysisId: created.json().id,
       fundId,
     });
-    const [{ messages, output_config }] = create.mock.calls.at(-1);
+    const { messages, output_config } = lastCall();
     return {
       body,
       prompt: messages[0].content.at(-1).text,
@@ -1162,7 +1177,7 @@ describe('what the analyst has changed before', () => {
     });
     await upload([pdf('next.pdf')], { analysisId: created.json().id, fundId: nextFundId });
 
-    const [{ messages }] = create.mock.calls.at(-1);
+    const { messages } = lastCall();
     return messages[0].content.at(-1).text as string;
   }
 
@@ -1219,7 +1234,7 @@ describe('what the analyst has changed before', () => {
     });
     await upload([pdf('again.pdf')]);
 
-    const [{ messages }] = create.mock.calls.at(-1);
+    const { messages } = lastCall();
     expect(messages[0].content.at(-1).text).not.toContain('total_investments, corrected');
   });
 

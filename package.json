@@ -9,7 +9,8 @@
     "dev:web": "npm run dev --workspace apps/agent-web",
     "dev:agent": "npm run dev --workspace apps/agent-api",
     "dev:customer": "npm run dev --workspace apps/customer-system",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "typecheck": "npm run typecheck --workspaces --if-present"
   },
   "keywords": [],
   "author": "",
