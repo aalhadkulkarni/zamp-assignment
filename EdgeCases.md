@@ -310,7 +310,9 @@ later applies to the next document, not this one. Defensible, and undocumented.
 
 ### 8.1 No authentication · **known, deferred**
 `resolveTenant` returns a constant. Anyone who can reach the API can read or
-write any analysis by id. Step 13 of the build order, explicitly time-permitting.
+write any analysis by id — including the deployed one, which is public. Step 13
+of the build order, explicitly time-permitting. See NotBuilt.md for what that
+means in practice, since the deployed instance also spends money per upload.
 
 ### 8.2 Analysis ids are guessable-ish · **open**
 UUIDv4, so not really — but with no auth they are the only thing standing between

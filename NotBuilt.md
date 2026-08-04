@@ -19,10 +19,23 @@ of them would have demonstrated anything about the problem.
 
 ### Authentication
 
-`resolveTenant` returns a constant. Anyone who can reach the API can read or
-write any analysis. The seam exists deliberately — `tenantId` is threaded
-through every query and every stored row, so adding auth means changing one
-function rather than every path that touches storage.
+`resolveTenant` returns a constant. The seam exists deliberately — `tenantId` is
+threaded through every query and every stored row, so adding auth means changing
+one function rather than every path that touches storage.
+
+Worth stating what that means for the deployment linked in the README, rather
+than leaving it as a feature checkbox. That API is public and unauthenticated
+right now. Anyone holding the URL can list every analysis, read the documents
+inside them, write to the customer's system, and ratify a lesson that changes how
+every future document from a fund is read. They can also upload documents, and
+each upload is a model call billed to me — an unauthenticated endpoint that
+spends money is a different class of problem from one that merely leaks, and it
+is the one I would fix first.
+
+Nothing here is sensitive: the funds are public institutions, the figures are
+invented, and the database is disposable. That is why it was acceptable to
+deploy in this state for a review, and it would not be acceptable for anything
+else.
 
 ### More than one customer
 
