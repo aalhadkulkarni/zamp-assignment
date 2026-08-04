@@ -1,8 +1,9 @@
 # Edge cases
 
 A working list of real-world paths this system will meet, and what it currently
-does about them. Nothing here is implemented yet — this is the survey, written
-before deciding what is worth building in the time left.
+does about them. Mostly a survey rather than a plan — written to decide what was
+worth building in the time left, and kept because what a system does not handle
+is worth stating rather than leaving to be found.
 
 Status is one of:
 
