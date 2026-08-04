@@ -79,6 +79,7 @@ const server = {
     server.watchers.clear();
     server.nextFields = FIELDS;
     server.autoFinish = true;
+    server.nextDiagnosis = null;
     server.restoreUpload();
 
     vi.mocked(api.watchAnalysis).mockImplementation((analysisId, onChange) => {
@@ -101,6 +102,7 @@ const server = {
         status: 'draft',
         createdAt: new Date().toISOString(),
         extraction: { state: 'idle', error: null },
+        diagnosis: { state: 'idle', error: null },
         fiscalYearEnd: '',
         messages: [{ id: 'm0', author: 'agent', text: 'Upload the documents you want analysed.' }],
         fields: [],
@@ -121,12 +123,13 @@ const server = {
       });
     });
 
-    // No diagnosis by default; a test that wants one calls server.diagnoses().
-    mockSubmitEdits.mockResolvedValue({
-      batchId: 'batch-1',
-      received: 1,
-      diagnosis: null,
-      error: null,
+    // Records the corrections and nothing else, as a 202 does. A test that
+    // wants an explanation calls server.diagnoses() and then finishes it.
+    mockSubmitEdits.mockImplementation(async (analysisId) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.diagnosis = { state: 'running', error: null };
+      if (server.autoFinish) setTimeout(() => server.finishDiagnosis(analysisId), 0);
+      return { batchId: 'batch-1', received: 1 };
     });
 
     vi.mocked(api.decideLesson).mockImplementation(async (analysisId, lessonId, decision, comment) => {
@@ -204,18 +207,41 @@ const server = {
   /** What the next extraction finds. Defaults to FIELDS; reset between tests. */
   nextFields: FIELDS as api.ReviewField[],
 
+  /** What the next diagnosis concludes. Null means it explains nothing. */
+  nextDiagnosis: null as api.Diagnosis | null,
+
   /** Lets a test hand back proposed lessons from the next submit. */
   diagnoses(diagnosis: api.Diagnosis) {
-    mockSubmitEdits.mockImplementation(async (analysisId) => {
-      const analysis = server.analyses.get(analysisId)!;
-      analysis.lessons = structuredClone(diagnosis.lessons);
+    server.nextDiagnosis = diagnosis;
+  },
+
+  /** The explanation landing, and the server saying so. */
+  finishDiagnosis(analysisId: string) {
+    const analysis = server.analyses.get(analysisId);
+    if (!analysis) return;
+    if (server.nextDiagnosis) {
+      analysis.lessons = structuredClone(server.nextDiagnosis.lessons);
       analysis.messages.push({
         id: crypto.randomUUID(),
         author: 'agent',
-        text: diagnosis.summary,
+        text: server.nextDiagnosis.summary,
       });
-      return { batchId: 'batch-1', received: 1, diagnosis, error: null };
+    }
+    analysis.diagnosis = { state: 'idle', error: null };
+    server.watchers.get(analysisId)?.();
+  },
+
+  /** Failing to explain has to wake the browser too. */
+  failDiagnosis(analysisId: string, error: string) {
+    const analysis = server.analyses.get(analysisId)!;
+    analysis.messages.push({
+      id: crypto.randomUUID(),
+      author: 'agent',
+      text: `Your corrections are recorded, but I could not explain them. ${error}`,
+      variant: 'error',
     });
+    analysis.diagnosis = { state: 'failed', error };
+    server.watchers.get(analysisId)?.();
   },
 };
 
@@ -1371,5 +1397,110 @@ describe('while the agent is reading', () => {
     expect(await screen.findByText(/Reading your documents/)).toBeInTheDocument();
     server.finishExtraction(id);
     expect(await screen.findByRole('table')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Confirm and write does two things with very different costs: a call to the
+ * customer's system, which is fast and can be refused, and a model call to work
+ * out why the values changed, which is neither. Only the second is deferred.
+ */
+describe('while the agent is explaining a correction', () => {
+  const LESSON = {
+    id: 'lesson-1',
+    type: 'units' as const,
+    scope: 'fund' as const,
+    fieldKeys: ['total_investments'],
+    explanation: 'I applied the thousands heading, but the figure you kept is the printed one.',
+    rule: 'For this fund, check whether the investments section restates its units.',
+    unitsMultiplier: 1,
+    documentLabel: '',
+    confidence: 'medium' as const,
+  };
+
+  async function writeWithACorrection() {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    server.holdExtraction(); // also holds the diagnosis
+    server.diagnoses({ summary: 'Here is what I think went wrong.', lessons: [LESSON] });
+
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    return user;
+  }
+
+  /**
+   * The write is the part that can be refused, so its result is still reported
+   * synchronously. What must not happen is the button waiting on the model call
+   * that follows it.
+   */
+  it('finishes the write without waiting for the explanation', async () => {
+    await writeWithACorrection();
+
+    // Read-only means the write went through and was confirmed.
+    expect(await screen.findByText(/The customer's database owns these values now/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Writing…' })).not.toBeInTheDocument();
+  });
+
+  it('says it is still working out why the values changed', async () => {
+    await writeWithACorrection();
+
+    expect(
+      await screen.findByText(/Working out what caused those corrections…/),
+    ).toBeInTheDocument();
+    // The proposal has not arrived, so nothing to ratify yet.
+    expect(screen.queryByText('Wrong units')).not.toBeInTheDocument();
+  });
+
+  it('shows the proposal when it arrives, and stops working', async () => {
+    await writeWithACorrection();
+    await screen.findByText(/Working out what caused those corrections…/);
+
+    server.finishDiagnosis(server.soleAnalysisId());
+
+    expect(await screen.findByText('Wrong units')).toBeInTheDocument();
+    expect(screen.getByText(/I applied the thousands heading/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Working out what caused those corrections…/),
+    ).not.toBeInTheDocument();
+  });
+
+  /** The corrections are safe either way; the analyst has to be told which. */
+  it('stops working and says so when the explanation fails', async () => {
+    await writeWithACorrection();
+    await screen.findByText(/Working out what caused those corrections…/);
+
+    server.failDiagnosis(server.soleAnalysisId(), 'Anthropic is rate limiting us.');
+
+    expect(await screen.findByText(/could not explain them/)).toBeInTheDocument();
+    expect(screen.getByText(/recorded/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Working out what caused those corrections…/),
+    ).not.toBeInTheDocument();
+  });
+
+  /** Nothing to explain when nothing was corrected. */
+  it('does not claim to be working when nothing was corrected', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+    await screen.findByText(/The customer's database owns these values now/);
+    expect(api.submitEdits).not.toHaveBeenCalled();
+    expect(
+      screen.queryByText(/Working out what caused those corrections…/),
+    ).not.toBeInTheDocument();
   });
 });

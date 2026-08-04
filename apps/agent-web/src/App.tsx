@@ -212,6 +212,11 @@ export default function App() {
 
       // Only once the values were accepted. Learning from a correction that was
       // itself rejected would teach us the wrong thing.
+      //
+      // This returns as soon as the corrections are stored. Working out what
+      // caused them is a model call, and holding the button through it would put
+      // the analyst back where they were before the write was split out — except
+      // now waiting on something they have already been told succeeded.
       if (editEvents.length > 0) {
         await submitEdits(current.id, current.fundId, editEvents);
       }

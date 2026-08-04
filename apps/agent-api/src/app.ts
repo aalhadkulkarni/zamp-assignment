@@ -32,6 +32,7 @@ import {
   analysisFund,
   appendMessages,
   beginExtraction,
+  beginDiagnosis,
   createAnalysis,
   decideLesson,
   getAnalysis,
@@ -42,6 +43,7 @@ import {
 } from './analyses.js';
 import { diagnosisSchema, type Diagnosis } from './diagnosis.js';
 import { runExtraction } from './extractionRun.js';
+import { runDiagnosis } from './diagnosisRun.js';
 import { onAnalysisChanged } from './events.js';
 import { diagnosisPrompt } from './prompts.js';
 import { resolveTenant } from './tenant.js';
@@ -346,74 +348,36 @@ export async function buildApp() {
       });
     }
 
+    // One diagnosis at a time, for the same reason as extraction: two batches
+    // being explained at once would race to append to the same conversation.
+    if (!(await beginDiagnosis(analysisId))) {
+      return reply.code(409).send({
+        error: 'DiagnosisInProgress',
+        message: 'I am still working out the last set of corrections.',
+      });
+    }
+
+    // Stored before anything slow happens. They are the raw material, and a
+    // failure to explain them must not lose them.
     const batchId = crypto.randomUUID();
     await storeCorrections(analysisId, batchId, edits);
 
-    // The corrections are recorded whatever happens next. A failed diagnosis
-    // must not lose them — they are the raw material, and the explanation can
-    // be attempted again.
-    let diagnosis: Diagnosis | null = null;
-    let error: ModelFailure | null = null;
-    try {
-      const definitions = await listFieldDefinitions();
-      const fundName = owner.fundName;
-      const fieldKeys = [...new Set(edits.map((e) => e.fieldKey))];
+    // Deliberately not awaited. Working out why a value changed is a model call,
+    // and the analyst has already been told their write succeeded — there is
+    // nothing left for this request to report. The proposed lessons arrive on
+    // the event stream. runDiagnosis never throws.
+    void runDiagnosis({
+      analysisId,
+      tenantId,
+      fundId: owner.fundId,
+      fundName: owner.fundName,
+      batchId,
+      edits,
+      log: request.log,
+    });
 
-      // The pages the analyst was looking at. Without them the model can only
-      // diagnose units errors and slips — the other three lesson types are
-      // about what else was on the page.
-      const pages = await readUploadedDocuments(analysisId);
-
-      const run = usingFixtures() ? diagnoseFixture : diagnose;
-      const result = await run(
-        diagnosisPrompt(fundName, definitions, edits),
-        pages.map((doc) => ({
-          filename: doc.filename,
-          extension: extname(doc.filename).toLowerCase(),
-          bytes: doc.bytes,
-        })),
-        diagnosisSchema(fieldKeys) as unknown as Record<string, unknown>,
-      );
-
-      // Structured outputs should guarantee this, but the corrections are
-      // already safely stored — degrading to "could not explain" beats a 500
-      // that makes a successful write look like a failure.
-      if (!Array.isArray(result.diagnosis?.lessons)) {
-        throw new Error('The diagnosis did not come back in the expected shape.');
-      }
-
-      // Ids are assigned here, not asked of the model. A model inventing
-      // identifiers is a way to get collisions and dangling references for no
-      // benefit — and an accept has to name exactly one lesson.
-      // Persisted as they are proposed, undecided. A lesson nobody ever ruled
-      // on is still worth having — it says the agent noticed something, and the
-      // analyst can come back to it.
-      diagnosis = {
-        summary: result.diagnosis.summary,
-        lessons: await storeLessons(tenantId, analysisId, batchId, owner.fundId, result.diagnosis.lessons),
-      };
-    } catch (thrown) {
-      error = describeFailure(thrown) ?? {
-        code: 'DiagnosisFailed',
-        message: 'Your corrections were recorded, but could not be explained.',
-      };
-      request.log.warn({ err: thrown }, 'diagnosis failed after storing the corrections');
-    }
-
-    // The explanation belongs in the conversation, not just in a response body.
-    // It is something the agent said, and it has to survive a refresh like
-    // everything else it said.
-    await appendMessages(analysisId, [
-      diagnosis
-        ? { author: 'agent', text: diagnosis.summary }
-        : {
-            author: 'agent',
-            text: `Your corrections were recorded, but I could not work out why they were needed. ${error?.message ?? ''}`.trim(),
-            variant: 'error' as const,
-          },
-    ]);
-
-    return reply.code(201).send({ batchId, received: edits.length, diagnosis, error });
+    // 202: the corrections are recorded and are being looked at.
+    return reply.code(202).send({ batchId, received: edits.length });
   });
 
   app.post<{ Params: { analysisId: string } }>(

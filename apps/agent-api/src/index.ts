@@ -20,7 +20,7 @@ try {
 const { buildApp } = await import('./app.js');
 const { migrate } = await import('./db.js');
 const { startListening } = await import('./events.js');
-const { failAbandonedExtractions } = await import('./analyses.js');
+const { failAbandonedWork } = await import('./analyses.js');
 
 // Unlike a missing API key, there is no degraded mode here: an analysis is the
 // product, and without somewhere to keep one there is nothing to serve. Failing
@@ -31,13 +31,13 @@ if (!process.env.DATABASE_URL) {
 }
 await migrate();
 
-// Anything left mid-extraction belonged to a process that no longer exists, so
+// Anything left mid-flight belonged to a process that no longer exists, so
 // nothing will ever finish or report it. This is the only moment we can be
 // certain of that, and without it a browser waits on a notification that is
 // never coming.
-const abandoned = await failAbandonedExtractions();
+const abandoned = await failAbandonedWork();
 if (abandoned > 0) {
-  console.warn(`Marked ${abandoned} extraction(s) as failed — they did not survive a restart.`);
+  console.warn(`Marked ${abandoned} job(s) as failed — they did not survive a restart.`);
 }
 
 // One LISTEN connection per instance. Everything that changes an analysis

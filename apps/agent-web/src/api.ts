@@ -58,12 +58,16 @@ export type StoredMessage = {
 
 /** The whole analysis as the server holds it. The browser renders this rather
  *  than accumulating its own copy, so a refresh costs nothing. */
+export type AgentWork = { state: 'idle' | 'running' | 'failed'; error: string | null };
+
 export type StoredAnalysis = AnalysisSummary & {
   /**
    * Whether the agent is reading a document right now. Separate from status: an
    * analysis is a draft either way.
    */
-  extraction: { state: 'idle' | 'running' | 'failed'; error: string | null };
+  extraction: AgentWork;
+  /** Whether the agent is working out why a batch of corrections happened. */
+  diagnosis: AgentWork;
   fiscalYearEnd: string;
   messages: StoredMessage[];
   fields: ReviewField[];
@@ -184,12 +188,16 @@ export type Diagnosis = {
   lessons: Lesson[];
 };
 
+/**
+ * What a 202 gives back: the corrections are recorded and are being looked at.
+ *
+ * Nothing about what caused them, because working that out is a model call. The
+ * proposed lessons arrive the same way an extraction does — the server says the
+ * analysis changed, and we re-read it.
+ */
 export type EditsResult = {
   batchId: string | null;
   received: number;
-  /** Null when the corrections were stored but the model could not be reached. */
-  diagnosis: Diagnosis | null;
-  error: { code: string; message: string } | null;
 };
 
 /**

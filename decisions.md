@@ -400,3 +400,18 @@ The SSE handler writes its headers with reply.raw.writeHead, which goes straight
 Nothing in the suite noticed: the tests read the stream with same-origin fetch from Node, which does not need CORS. Only a browser hitting a different port does, which is every real deployment - agent-web on Vercel, agent-api on Render.
 
 The fix is to spread the headers Fastify already staged into the writeHead call rather than replacing them. Found by opening the page.
+
+
+28 - Confirm and write does two things. Only the slow one was deferred.
+
+The same button covered a call to the customer's system and a model call, and it waited for both. Splitting it needed a decision about which half to defer, and the answer is not "both".
+
+The write stays synchronous. It is sub-second, and it is the one operation here that can be refused - a missing required field, a value their schema will not take, a period that collides with a report they already hold. Those come back as per-field problems the analyst has to see and fix before anything else makes sense. Deferring it would mean releasing the button, saying nothing, and then retracting a write the analyst had every reason to believe had gone through.
+
+The diagnosis is deferred. It is a model call, it happens after the write has already been confirmed, and nothing about it changes what the analyst does next unless they choose to ratify something. So the corrections are stored, the request returns 202, and the proposal arrives on the same event stream the extraction uses.
+
+Measured in a browser: the button releases 4.3 seconds after the click, having confirmed the write, and the proposal lands ten seconds later. Before this the button held for the whole of both.
+
+Extraction state and diagnosis state are separate columns rather than one "the agent is busy" flag. They start at different moments, fail independently, and an analysis can plausibly be having a new document read while an older batch of corrections is still being explained. One flag would have had to pick which of those to describe.
+
+The failure path matters more here than for extraction, because the corrections are already stored and the write already succeeded. An explanation that fails is not a lost correction - it is a missing sentence about a correction that is safely recorded, and the message says exactly that.

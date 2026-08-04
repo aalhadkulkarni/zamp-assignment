@@ -203,14 +203,14 @@ async function upload(
  * fixture delay the extraction can finish before the upload's own response has
  * been read — and a listener attached after the fact waits forever.
  */
-async function settled(analysisId: string) {
+async function settled(analysisId: string, job: 'extraction' | 'diagnosis' = 'extraction') {
   for (let attempt = 0; attempt < 400; attempt += 1) {
     const res = await app.inject({ method: 'GET', url: `/analyses/${analysisId}` });
     const analysis = res.json();
-    if (analysis.extraction?.state !== 'running') return analysis;
+    if (analysis[job]?.state !== 'running') return analysis;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error('The extraction never finished.');
+  throw new Error(`The ${job} never finished.`);
 }
 
 /** The agent's last word, which used to arrive in the upload's own response. */
@@ -728,13 +728,20 @@ describe('POST /analyses/:analysisId/edits', () => {
     },
   };
 
+  /**
+   * Submits corrections and waits for the explanation, which now runs after the
+   * request has been answered. Settling here keeps each assertion about the
+   * outcome rather than about the timing.
+   */
   async function submit(body: object, analysisId = ANALYSIS) {
     const res = await app.inject({
       method: 'POST',
       url: `/analyses/${analysisId}/edits`,
       payload: body,
     });
-    return { status: res.statusCode, body: res.json() };
+    const analysis =
+      res.statusCode === 202 ? await settled(analysisId, 'diagnosis') : null;
+    return { status: res.statusCode, body: res.json(), analysis };
   }
 
   const DIAGNOSIS_REPLY = {
@@ -770,25 +777,27 @@ describe('POST /analyses/:analysisId/edits', () => {
   it('stores the batch and says how many it took', async () => {
     const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT, { ...EDIT, id: 'edit-2', fieldKey: 'net_position' }] });
 
-    expect(status).toBe(201);
+    // 202: recorded and being looked at. What caused them is not known yet.
+    expect(status).toBe(202);
     expect(body).toMatchObject({ batchId: expect.any(String), received: 2 });
+    expect(body.diagnosis).toBeUndefined();
   });
 
   describe('the diagnosis', () => {
-    it('asks the model why, and returns what it proposed', async () => {
-      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+    it('asks the model why, and puts what it proposed on the analysis', async () => {
+      const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      expect(body.diagnosis.summary).toMatch(/already in whole dollars/);
-      expect(body.diagnosis.lessons).toHaveLength(1);
-      expect(body.diagnosis.lessons[0]).toMatchObject({ type: 'units', scope: 'fund' });
-      expect(body.error).toBeNull();
+      expect(analysis.diagnosis).toEqual({ state: 'idle', error: null });
+      expect(lastAgentMessage(analysis)?.text).toMatch(/already in whole dollars/);
+      expect(analysis.lessons).toHaveLength(1);
+      expect(analysis.lessons[0]).toMatchObject({ type: 'units', scope: 'fund' });
     });
 
     /** An accept has to name exactly one lesson, and a model inventing ids is a
      *  way to get collisions and dangling references for no benefit. */
     it('assigns the lesson ids itself', async () => {
-      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
-      expect(body.diagnosis.lessons[0].id).toMatch(/^[0-9a-f-]{36}$/);
+      const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
+      expect(analysis.lessons[0].id).toMatch(/^[0-9a-f-]{36}$/);
     });
 
     it('sends the correction and the provenance it was captured with', async () => {
@@ -834,10 +843,10 @@ describe('POST /analyses/:analysisId/edits', () => {
     /** Render wipes the upload directory on every restart. A diagnosis without
      *  the page is worse than one with it, and far better than a failure. */
     it('still diagnoses when the documents are no longer on disk', async () => {
-      const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+      const { status, analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      expect(status).toBe(201);
-      expect(body.diagnosis.lessons).toHaveLength(1);
+      expect(status).toBe(202);
+      expect(analysis.lessons).toHaveLength(1);
       const [{ messages }] = create.mock.calls[0];
       expect(messages[0].content.filter((b: { type: string }) => b.type === 'document')).toHaveLength(0);
     });
@@ -856,12 +865,15 @@ describe('POST /analyses/:analysisId/edits', () => {
     it('keeps the corrections when the diagnosis fails', async () => {
       create.mockRejectedValue(await sdkError('RateLimitError', 429));
 
-      const { status, body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+      const { status, body, analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      expect(status).toBe(201);
+      // Accepted, because they were stored before anything could fail.
+      expect(status).toBe(202);
       expect(body.batchId).toEqual(expect.any(String));
-      expect(body.diagnosis).toBeNull();
-      expect(body.error.code).toBe('RateLimited');
+
+      expect(analysis.diagnosis.state).toBe('failed');
+      expect(analysis.diagnosis.error).toMatch(/rate limiting/i);
+      expect(lastAgentMessage(analysis)?.text).toContain('Your corrections are recorded');
 
       const { rows } = await getPool().query('SELECT 1 FROM correction WHERE analysis_id = $1', [
         ANALYSIS,
@@ -871,9 +883,9 @@ describe('POST /analyses/:analysisId/edits', () => {
 
     it('answers from the recording in fixture mode', async () => {
       process.env.USE_FIXTURES = 'true';
-      const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
+      const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      expect(body.diagnosis.lessons.length).toBeGreaterThan(1);
+      expect(analysis.lessons.length).toBeGreaterThan(1);
       expect(create).not.toHaveBeenCalled();
     });
   });
@@ -995,12 +1007,13 @@ describe('applying what was learned', () => {
       usage: { input_tokens: 1840, output_tokens: 410 },
     });
 
-    const submitted = await app.inject({
+    await app.inject({
       method: 'POST',
       url: `/analyses/${ANALYSIS}/edits`,
       payload: { fundId: 'calpers', edits: [EDIT] },
     });
-    const [lesson] = submitted.json().diagnosis.lessons;
+    // The proposal lands on the analysis after the request is answered.
+    const [lesson] = (await settled(ANALYSIS, 'diagnosis')).lessons;
 
     await app.inject({
       method: 'POST',
@@ -1348,6 +1361,9 @@ describe('what the analyst has changed before', () => {
           edits: [{ ...EDIT, id: `e${i}`, to: String(i) }],
         },
       });
+      // One diagnosis at a time, so a batch sent while the last is still being
+      // explained is refused. Waiting is what an analyst would do anyway.
+      await settled(ANALYSIS, 'diagnosis');
     }
     const prompt = await afterCorrecting();
 

@@ -43,6 +43,7 @@ export default function Workspace({
 }: Props) {
   const approved = analysis.status === 'approved';
   const reading = analysis.extraction.state === 'running';
+  const explaining = analysis.diagnosis.state === 'running';
   const [fiscalYearEnd, setFiscalYearEnd] = useState(analysis.fiscalYearEnd);
   const editCount = Object.keys(edits).length;
 
@@ -72,6 +73,15 @@ export default function Workspace({
           {reading && (
             <div className="agent-working">
               <Loading label="Reading your documents. This usually takes under a minute." />
+            </div>
+          )}
+
+          {/* The write has already been confirmed by this point. What is still
+              running is the explanation, and saying so is what stops the
+              proposal appearing out of nowhere a minute later. */}
+          {explaining && (
+            <div className="agent-working">
+              <Loading label="Working out what caused those corrections…" />
             </div>
           )}
 

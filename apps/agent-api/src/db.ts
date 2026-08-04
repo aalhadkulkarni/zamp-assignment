@@ -87,8 +87,14 @@ const SCHEMA = `
     extraction_state      text NOT NULL DEFAULT 'idle',
     extraction_error      text,
     extraction_started_at timestamptz,
+    -- The other thing the agent does, tracked separately because it happens at
+    -- a different moment and can fail on its own. Working out why a value was
+    -- corrected is a model call; writing to the customer is not.
+    diagnosis_state       text NOT NULL DEFAULT 'idle',
+    diagnosis_error       text,
     CHECK (status IN ('draft', 'approved')),
-    CHECK (extraction_state IN ('idle', 'running', 'failed'))
+    CHECK (extraction_state IN ('idle', 'running', 'failed')),
+    CHECK (diagnosis_state IN ('idle', 'running', 'failed'))
   );
 
   -- The pages, not a path to them. Render's filesystem is wiped on every
@@ -191,6 +197,8 @@ const SCHEMA = `
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_state text NOT NULL DEFAULT 'idle';
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_error text;
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_started_at timestamptz;
+  ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_state text NOT NULL DEFAULT 'idle';
+  ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_error text;
 `;
 
 export async function migrate(): Promise<void> {

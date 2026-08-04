@@ -30,6 +30,8 @@ export type StoredLesson = {
   comment?: string;
 };
 
+export type AgentWork = { state: 'idle' | 'running' | 'failed'; error: string | null };
+
 export type StoredAnalysis = {
   id: string;
   fundId: string;
@@ -39,7 +41,9 @@ export type StoredAnalysis = {
    * Whether the agent is reading a document for this analysis right now. A
    * separate axis from status: an analysis is a draft either way.
    */
-  extraction: { state: 'idle' | 'running' | 'failed'; error: string | null };
+  extraction: AgentWork;
+  /** Whether the agent is working out why a batch of corrections happened. */
+  diagnosis: AgentWork;
   fiscalYearEnd: string;
   createdAt: string;
   messages: StoredMessage[];
@@ -87,7 +91,7 @@ export async function getAnalysis(
 
   const { rows } = await pool.query(
     `SELECT id, fund_id, fund_name, status, fiscal_year_end, created_at,
-            extraction_state, extraction_error
+            extraction_state, extraction_error, diagnosis_state, diagnosis_error
        FROM analysis WHERE id = $1 AND tenant_id = $2`,
     [analysisId, tenantId],
   );
@@ -133,8 +137,12 @@ export async function getAnalysis(
     fundName: row.fund_name,
     status: row.status,
     extraction: {
-      state: (row.extraction_state as StoredAnalysis['extraction']['state']) ?? 'idle',
+      state: (row.extraction_state as AgentWork['state']) ?? 'idle',
       error: (row.extraction_error as string | null) ?? null,
+    },
+    diagnosis: {
+      state: (row.diagnosis_state as AgentWork['state']) ?? 'idle',
+      error: (row.diagnosis_error as string | null) ?? null,
     },
     fiscalYearEnd: row.fiscal_year_end ?? '',
     createdAt: iso(row.created_at),
@@ -218,6 +226,29 @@ export async function beginExtraction(analysisId: string): Promise<boolean> {
   return rowCount === 1;
 }
 
+/** Same contract as beginExtraction, for the other thing the agent does. */
+export async function beginDiagnosis(analysisId: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    `UPDATE analysis
+        SET diagnosis_state = 'running', diagnosis_error = NULL, updated_at = now()
+      WHERE id = $1 AND diagnosis_state <> 'running'`,
+    [analysisId],
+  );
+  return rowCount === 1;
+}
+
+export async function finishDiagnosis(
+  analysisId: string,
+  error: string | null,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE analysis
+        SET diagnosis_state = $2, diagnosis_error = $3, updated_at = now()
+      WHERE id = $1`,
+    [analysisId, error === null ? 'idle' : 'failed', error],
+  );
+}
+
 export async function finishExtraction(
   analysisId: string,
   error: string | null,
@@ -231,22 +262,30 @@ export async function finishExtraction(
 }
 
 /**
- * Marks extractions that were running when the process died.
+ * Marks work that was running when the process died.
  *
  * Nothing else would. The run that owned them is gone, so it can neither finish
  * nor report, and the analysis would sit at 'running' forever with a browser
  * waiting on a notification that is never coming. Called at boot, which is the
  * moment we know for certain that nothing we started is still going.
  */
-export async function failAbandonedExtractions(): Promise<number> {
-  const { rowCount } = await getPool().query(
+export async function failAbandonedWork(): Promise<number> {
+  const pool = getPool();
+  const reading = await pool.query(
     `UPDATE analysis
         SET extraction_state = 'failed',
             extraction_error = 'The service restarted while reading your documents. Send them again.',
             updated_at = now()
       WHERE extraction_state = 'running'`,
   );
-  return rowCount ?? 0;
+  const explaining = await pool.query(
+    `UPDATE analysis
+        SET diagnosis_state = 'failed',
+            diagnosis_error = 'The service restarted before it could explain those corrections. They are still recorded.',
+            updated_at = now()
+      WHERE diagnosis_state = 'running'`,
+  );
+  return (reading.rowCount ?? 0) + (explaining.rowCount ?? 0);
 }
 
 export async function appendMessages(
