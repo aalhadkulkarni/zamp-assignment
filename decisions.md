@@ -347,3 +347,22 @@ Two other things bound it. The list is capped at twenty, newest first, because a
 Kept deliberately: corrections whose diagnosis the analyst rejected. A rejection means our explanation was wrong, not that the correction did not happen. The edge is real - the model may re-derive a conclusion a human turned down - but suppressing the evidence because we misread it once is worse.
 
 What this makes plain, and what I would say in an interview: this is the weakest-typed part of the learning loop. It is prose in a prompt, which is exactly the shape decision 22 exists to avoid for lessons. It earns its place by carrying information the typed path structurally cannot - cross-document patterns, and corrections that produced no lesson at all - and it is labelled as evidence rather than as a rule so that its status is legible to the model and to anyone reading the prompt.
+
+
+25 - Navigating to an analysis renders that analysis loading, not the screen you left.
+
+A bug, found by using the thing rather than by reading it.
+
+Starting an analysis showed the list for a second or two before the workspace appeared. It looked like a redirect, or like the click had failed and something recovered. The cause was that the workspace only rendered once the analysis had been fetched - so between creating it and holding it, the render fell through to the list at the bottom of the component. The list was not a stale frame. It was the actual fallback branch.
+
+The fix is that "navigated to an analysis we do not hold yet" is now its own state with its own screen. The analyst asked for a specific screen; the honest answer is that screen, loading.
+
+Two round trips are involved and they need different treatment. Creating the analysis happens before there is anything to navigate to, so the form keeps its own pending state - the button reads "Starting…" and is disabled, because an enabled button that appears to do nothing invites a second click and a second analysis. Fetching it happens after, so navigation is immediate and the workspace shows the loading state itself. Waiting for the fetch before switching screens would have left the analyst on a form whose button had stopped responding.
+
+A failure in the first case keeps them on the form with the reason, rather than dropping them back to the list having lost the fund they picked.
+
+On the list itself: it now says it is fetching before it claims there is nothing. An empty list and a list not yet loaded look identical, and "No analyses yet" is a statement about what the server said, which we cannot make before it has said anything. The New analysis button stays enabled throughout, because starting one does not depend on knowing about the others.
+
+The spinner is CSS rather than an animated image. It inherits the current colour, costs no request, and stops when the page stops - an animated GIF keeps spinning through a frozen tab, which is the one moment a spinner most needs to be telling the truth. It honours prefers-reduced-motion by pulsing instead.
+
+Refreshing the list after an action deliberately has no spinner. The analyst has already been given feedback for what they did, and flipping the list into a loading state behind them would be movement without information.

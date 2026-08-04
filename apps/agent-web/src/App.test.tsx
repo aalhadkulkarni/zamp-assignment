@@ -186,9 +186,93 @@ async function startAnalysis(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe('starting an analysis', () => {
-  it('shows an empty state before any analysis exists', () => {
+  /**
+   * "No analyses yet" is a claim about what the server said, so it must wait
+   * for the server to say it. Shown on mount it is a guess that happens to be
+   * right when the list is empty and wrong every other time.
+   */
+  it('says it is fetching before it claims there is nothing', async () => {
     render(<App />);
-    expect(screen.getByText('No analyses yet.')).toBeInTheDocument();
+
+    expect(screen.getByRole('status')).toHaveTextContent('Fetching your analyses…');
+    expect(screen.queryByText('No analyses yet.')).not.toBeInTheDocument();
+
+    expect(await screen.findByText('No analyses yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  /** Starting a new one does not depend on knowing about the old ones. */
+  it('can start a new analysis while the list is still loading', () => {
+    render(<App />);
+    expect(screen.getByRole('button', { name: 'New analysis' })).toBeEnabled();
+  });
+
+  /**
+   * The bug this replaces: the workspace branch required the analysis to be
+   * loaded, so between creating it and fetching it the render fell through to
+   * the list. Clicking Start showed the list for as long as the fetch took,
+   * which reads as a failed click followed by a redirect.
+   */
+  it('never shows the list between starting an analysis and opening it', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realGet = vi.mocked(api.getAnalysis).getMockImplementation()!;
+    vi.mocked(api.getAnalysis).mockImplementation(async (id) => {
+      await held;
+      return realGet(id);
+    });
+
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    // Mid-flight: the screen asked for, loading — not the one navigated from.
+    expect(await screen.findByText('Opening the analysis…')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Analyses' })).not.toBeInTheDocument();
+    expect(screen.queryByText('No analyses yet.')).not.toBeInTheDocument();
+
+    release();
+    expect(await screen.findByLabelText(/Choose documents/)).toBeInTheDocument();
+  });
+
+  it('keeps the button pending while the analysis is being created', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const realCreate = vi.mocked(api.createAnalysis).getMockImplementation()!;
+    vi.mocked(api.createAnalysis).mockImplementation(async (fundId) => {
+      await held;
+      return realCreate(fundId);
+    });
+
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole('button', { name: 'New analysis' }));
+    await screen.findByRole('combobox');
+    await user.selectOptions(screen.getByLabelText('Fund'), FUNDS[0].id);
+    await user.click(screen.getByRole('button', { name: 'Start analysis' }));
+
+    // A second click here would create a second analysis.
+    const button = await screen.findByRole('button', { name: 'Starting…' });
+    expect(button).toBeDisabled();
+    expect(api.createAnalysis).toHaveBeenCalledTimes(1);
+
+    release();
+    expect(await screen.findByLabelText(/Choose documents/)).toBeInTheDocument();
+  });
+
+  /** Dropped back to the list, the analyst has lost the fund they picked. */
+  it('stays on the form and says why when the analysis cannot be created', async () => {
+    vi.mocked(api.createAnalysis).mockRejectedValue(new Error('customer-system is unreachable'));
+
+    const user = userEvent.setup();
+    await startAnalysis(user);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('customer-system is unreachable');
+    expect(screen.getByRole('button', { name: 'Start analysis' })).toBeEnabled();
+    expect(screen.getByLabelText('Fund')).toHaveValue(FUNDS[0].id);
   });
 
   it('cannot start without picking a fund', async () => {

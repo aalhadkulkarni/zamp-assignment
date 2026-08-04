@@ -14,6 +14,7 @@ import {
   type StoredAnalysis,
 } from './api';
 import AnalysisList from './components/AnalysisList';
+import Loading from './components/Loading';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
 import type { EditEvent } from './types';
@@ -28,6 +29,11 @@ type View = { name: 'list' } | { name: 'new' } | { name: 'analysis'; id: string 
 
 export default function App() {
   const [analyses, setAnalyses] = useState<AnalysisSummary[]>([]);
+  /**
+   * Starts true. An empty list and a list not yet fetched look identical, and
+   * "No analyses yet" is a claim we cannot make until the server has answered.
+   */
+  const [listLoading, setListLoading] = useState(true);
   const [current, setCurrent] = useState<StoredAnalysis | null>(null);
   const [view, setView] = useState<View>({ name: 'list' });
   const [writing, setWriting] = useState(false);
@@ -43,6 +49,9 @@ export default function App() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [editEvents, setEditEvents] = useState<EditEvent[]>([]);
 
+  // No spinner here: this runs after an action the analyst has already been
+  // given feedback for, and flipping the list to a loading state behind them
+  // would be movement without information.
   const refreshList = useCallback(async () => {
     try {
       setAnalyses(await listAnalyses());
@@ -66,7 +75,8 @@ export default function App() {
     let live = true;
     listAnalyses()
       .then((rows) => live && setAnalyses(rows))
-      .catch((error) => live && setFailure(error.message));
+      .catch((error) => live && setFailure(error.message))
+      .finally(() => live && setListLoading(false));
     return () => {
       live = false;
     };
@@ -128,14 +138,20 @@ export default function App() {
     });
   }
 
+  /**
+   * Awaited by the form, which keeps its button in a pending state until this
+   * settles. Throwing rather than swallowing is what lets it stop waiting when
+   * the analysis could not be created.
+   */
   async function startAnalysis(fund: Fund) {
-    try {
-      const created = await createAnalysis(fund.id);
-      setView({ name: 'analysis', id: created.id });
-      await Promise.all([load(created.id), refreshList()]);
-    } catch (error) {
-      setFailure(error instanceof Error ? error.message : 'Could not start an analysis.');
-    }
+    setFailure(null);
+    const created = await createAnalysis(fund.id);
+
+    // The analysis exists, so navigate now and let the workspace show its own
+    // loading state. Waiting for the fetch before switching screens would leave
+    // the analyst on a form whose button did nothing.
+    setView({ name: 'analysis', id: created.id });
+    await Promise.all([load(created.id), refreshList()]);
   }
 
   async function send(text: string, files: File[]): Promise<boolean> {
@@ -212,7 +228,34 @@ export default function App() {
     return <NewAnalysis onStart={startAnalysis} onCancel={() => setView({ name: 'list' })} />;
   }
 
-  if (view.name === 'analysis' && current?.id === view.id) {
+  /**
+   * Navigated to an analysis we do not hold yet.
+   *
+   * This branch used to be missing, and the render fell through to the list —
+   * so starting an analysis showed the list for as long as the fetch took,
+   * which read as the click having failed and then a redirect. The analyst has
+   * asked for a specific screen; the honest answer is that screen, loading.
+   */
+  if (view.name === 'analysis' && current?.id !== view.id) {
+    return (
+      <div className="page">
+        {failure ? (
+          <>
+            <p className="form-error" role="alert">
+              {failure}
+            </p>
+            <button onClick={() => setView({ name: 'list' })}>← Analyses</button>
+          </>
+        ) : (
+          <div className="loading-page">
+            <Loading label="Opening the analysis…" />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (view.name === 'analysis' && current) {
     return (
       <Workspace
         analysis={current}
@@ -241,8 +284,10 @@ export default function App() {
   return (
     <AnalysisList
       analyses={analyses}
+      loading={listLoading}
       failure={failure}
       onOpen={(id) => {
+        setFailure(null);
         setView({ name: 'analysis', id });
         void load(id);
       }}

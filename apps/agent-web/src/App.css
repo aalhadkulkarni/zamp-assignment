@@ -1,3 +1,54 @@
+/* ---------- Loading ---------- */
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Respect a stated preference against motion. A spinner that cannot spin still
+   has to say something is happening, so it pulses instead of vanishing. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation: pulse 1.4s ease-in-out infinite;
+    border-top-color: currentColor;
+    opacity: 0.4;
+  }
+
+  @keyframes pulse {
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+/* Centred in the space the screen it replaces would have filled, so the page
+   does not jump when the real content arrives. */
+.loading-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+}
+
 /* ---------- Landing and new-analysis screens ---------- */
 
 .page {
