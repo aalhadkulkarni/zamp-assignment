@@ -200,11 +200,6 @@ application — it is a model reading your documents. The upload returns
 immediately and the result arrives over an event stream, so the page tells you
 what it is doing rather than freezing.
 
----|---|
-| Review surface | https://zamp-assignment-agent-web.vercel.app/ |
-| Agent API | https://zamp-agent-api.onrender.com |
-| Customer system | https://zamp-customer-system.onrender.com |
-
 ---
 
 ## Layout
