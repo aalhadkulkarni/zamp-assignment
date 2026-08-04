@@ -169,9 +169,9 @@ later extraction produces a different result.
 
 | | |
 |---|---|
-| Review surface | _add Vercel URL_ |
-| Agent API | _add Render URL_ |
-| Customer system | _add Render URL_ |
+| Review surface | https://zamp-assignment-agent-web.vercel.app/ |
+| Agent API | https://zamp-agent-api.onrender.com |
+| Customer system | https://zamp-customer-system.onrender.com |
 
 ---
 
