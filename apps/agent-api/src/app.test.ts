@@ -1119,3 +1119,131 @@ describe('the fund an analysis belongs to', () => {
     expect(body.error).toBe('UnknownAnalysis');
   });
 });
+
+/**
+ * Raw correction history, sent alongside the ratified rules rather than instead
+ * of them. Lessons are conclusions a human agreed to; these are the evidence,
+ * and they carry the patterns no single per-batch diagnosis had enough
+ * documents to see.
+ */
+describe('what the analyst has changed before', () => {
+  const EDIT = {
+    id: 'e1',
+    fieldKey: 'total_investments',
+    from: '462090073000',
+    to: '462090073',
+    at: '2026-08-04T10:00:00.000Z',
+    context: {
+      sourceText: 'Total Investments $462,090,073',
+      sourcePage: 1,
+      confidence: 'high',
+      reasoning: 'PERF A column.',
+    },
+  };
+
+  /** Correct something, then start a fresh analysis and read what it was sent. */
+  async function afterCorrecting(fundId = 'calpers', nextFundId = fundId) {
+    await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/edits`,
+      payload: { fundId, edits: [EDIT] },
+    });
+
+    const created = await app.inject({
+      method: 'POST',
+      url: '/analyses',
+      payload: { fundId: nextFundId },
+    });
+    create.mockResolvedValueOnce({
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+      usage: { input_tokens: 100, output_tokens: 10 },
+    });
+    await upload([pdf('next.pdf')], { analysisId: created.json().id, fundId: nextFundId });
+
+    const [{ messages }] = create.mock.calls.at(-1);
+    return messages[0].content.at(-1).text as string;
+  }
+
+  it('sends what was corrected, with the reasoning that produced it', async () => {
+    const prompt = await afterCorrecting();
+
+    expect(prompt).toContain('total_investments, corrected');
+    expect(prompt).toContain('you extracted: 462090073000');
+    expect(prompt).toContain('the analyst changed it to: 462090073');
+    expect(prompt).toContain('your reasoning was: PERF A column.');
+  });
+
+  /**
+   * The failure this block most invites: a list of correct-looking figures next
+   * to their field names, in a prompt asking for figures. Every value belongs to
+   * a different document, and saying so is the only thing standing between the
+   * history and last year's numbers being copied forward.
+   */
+  it('says plainly that the figures belong to other documents', async () => {
+    const prompt = await afterCorrecting();
+
+    expect(prompt).toContain('different document covering a different period');
+    expect(prompt).toContain('Do not carry any of these figures across');
+  });
+
+  /** Evidence and ratified rules are different claims and must read as such. */
+  it('does not present a correction as something confirmed', async () => {
+    const prompt = await afterCorrecting();
+
+    const history = prompt.slice(prompt.indexOf('here is what the analyst changed'));
+    expect(history).toContain('These are corrections, not rules');
+    expect(history).toContain('nobody has confirmed what caused them');
+  });
+
+  it('keeps one fund’s corrections away from another', async () => {
+    const prompt = await afterCorrecting('calpers', 'calstrs');
+
+    expect(prompt).not.toContain('total_investments, corrected');
+  });
+
+  it('does not send an analysis its own corrections', async () => {
+    await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/edits`,
+      payload: { fundId: 'calpers', edits: [EDIT] },
+    });
+    // Re-uploading to the same analysis: these corrections are about the very
+    // document being read again, not about a previous one.
+    create.mockResolvedValueOnce({
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+      usage: { input_tokens: 100, output_tokens: 10 },
+    });
+    await upload([pdf('again.pdf')]);
+
+    const [{ messages }] = create.mock.calls.at(-1);
+    expect(messages[0].content.at(-1).text).not.toContain('total_investments, corrected');
+  });
+
+  it('says nothing at all when there is no history', async () => {
+    await upload([pdf('acfr.pdf')]);
+
+    const [{ messages }] = create.mock.calls[0];
+    expect(messages[0].content.at(-1).text).not.toContain('here is what the analyst changed');
+  });
+
+  /** An unbounded prompt stops working somewhere around the hundredth document. */
+  it('caps the history at the twenty most recent', async () => {
+    for (let i = 0; i < 25; i += 1) {
+      await app.inject({
+        method: 'POST',
+        url: `/analyses/${ANALYSIS}/edits`,
+        payload: {
+          fundId: 'calpers',
+          edits: [{ ...EDIT, id: `e${i}`, to: String(i) }],
+        },
+      });
+    }
+    const prompt = await afterCorrecting();
+
+    expect(prompt.match(/, corrected /g)).toHaveLength(20);
+  });
+});

@@ -348,6 +348,58 @@ export async function decideLesson(
   return rows.length > 0 ? toLesson(rows[0]) : null;
 }
 
+export type PastCorrection = {
+  fieldKey: string;
+  from: string;
+  to: string;
+  reasoning: string;
+  sourceText: string;
+  correctedAt: string;
+};
+
+/**
+ * What the analyst has changed on this fund's earlier documents.
+ *
+ * This is raw evidence, not a ratified rule, and it is deliberately kept
+ * separate from `applicableLessons` for that reason. A lesson is a conclusion a
+ * human agreed to; a correction is only a thing that happened. They are useful
+ * for the patterns the per-batch diagnosis could not see — the same field
+ * corrected on three different documents is a signal no single diagnosis had
+ * the evidence to spot.
+ *
+ * Scoped to the fund and excluding the analysis being worked on, because
+ * corrections on the current document are about the document in front of us.
+ *
+ * Capped because a prompt that grows with every correction ever made stops
+ * working somewhere around the hundredth document, and the newest corrections
+ * are the ones that reflect how this issuer reports now.
+ */
+export async function previousCorrections(
+  tenantId: string,
+  fundId: string,
+  exceptAnalysisId: string,
+  limit = 20,
+): Promise<PastCorrection[]> {
+  const { rows } = await getPool().query(
+    `SELECT c.field_key, c.from_value, c.to_value, c.context, c.created_at
+       FROM correction c
+       JOIN analysis a ON a.id = c.analysis_id
+      WHERE a.tenant_id = $1 AND a.fund_id = $2 AND c.analysis_id <> $3
+      ORDER BY c.created_at DESC
+      LIMIT $4`,
+    [tenantId, fundId, exceptAnalysisId, limit],
+  );
+
+  return rows.map((row) => ({
+    fieldKey: row.field_key as string,
+    from: row.from_value as string,
+    to: row.to_value as string,
+    reasoning: (row.context?.reasoning as string) ?? '',
+    sourceText: (row.context?.sourceText as string) ?? '',
+    correctedAt: new Date(row.created_at as string).toISOString().slice(0, 10),
+  }));
+}
+
 /**
  * The query this database exists for. Every extraction asks it: what have we
  * been told, that applies here?

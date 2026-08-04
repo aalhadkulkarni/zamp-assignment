@@ -34,6 +34,7 @@ import {
   appendMessages,
   applicableLessons,
   createAnalysis,
+  previousCorrections,
   decideLesson,
   getAnalysis,
   listAnalyses,
@@ -478,13 +479,16 @@ export async function buildApp() {
         // browser. It is their contract, and a client that could choose it could
         // choose what ends up in their database. The fund's name is theirs too —
         // the browser sends an id, never a label we then repeat back as fact.
-        const [definitions, ratified] = await Promise.all([
+        const [definitions, ratified, history] = await Promise.all([
           listFieldDefinitions(),
           // Everything an analyst has confirmed that applies to this fund. This
           // is the query the database exists for, and this is where the loop
           // closes: a correction made on one document changes how the next one
           // is read.
           applicableLessons(resolveTenant(request), owner.fundId),
+          // Raw evidence alongside the ratified rules. See previousCorrections
+          // for why the two are fetched and rendered separately.
+          previousCorrections(resolveTenant(request), owner.fundId, analysisId),
         ]);
         fundName = owner.fundName;
 
@@ -493,7 +497,7 @@ export async function buildApp() {
         plan = planLessons(ratified);
 
         const reply_ = await run(
-          extractionPrompt(fundName, definitions, prompt, plan.navigation),
+          extractionPrompt(fundName, definitions, prompt, plan.navigation, history),
           documents.map((doc) => ({
             filename: doc.filename,
             extension: extname(doc.filename).toLowerCase(),

@@ -330,3 +330,20 @@ Both the upload and the corrections endpoint took a fundId from the request body
 The fund is now read from the analysis row, which fixes it at creation. A body that disagrees is a 409 rather than being silently ignored, because a client sending the wrong fund is confused about something and should be told.
 
 Nothing about this is exotic. It is the ordinary rule that the server does not accept from a client what it can look up itself. Worth recording only because the bug was invisible in tests - the fixtures agreed with each other - and appeared the moment two funds existed at once.
+
+
+24 - Past corrections go into the extraction prompt as evidence, beside the rules.
+
+Until now the model saw a correction exactly once, at the moment it was made, and afterwards only the ratified lesson that came out of it. That is defensible - a lesson is a conclusion a human agreed to, a correction is only a thing that happened - but it throws away a category of signal.
+
+The per-batch diagnosis can only reason about the document in front of it. The same field corrected on three separate documents is a pattern, and no single diagnosis ever had enough evidence to see it. Corrections diagnosed as typos produce no lesson at all; three typos on one field are not three typos. A rejected diagnosis leaves the correction with nothing attached, even though the correction still happened.
+
+So the last twenty corrections for this fund now go into the extraction prompt, with the reasoning that produced each one. This does not replace anything: the typed lessons of decision 22 still go to their four separate places, and this is a fifth input alongside them, clearly marked as unratified.
+
+The risk is value leakage, and it is worth being honest that the mitigation is weaker than the rest of the system. A list of correct-looking figures next to their field names, inside a prompt asking for figures, is an invitation to copy them forward. What stands against that is a sentence - the block says every value comes from a different document covering a different period, that the correct answers now will be different numbers, and not to carry any across. That is a prompt instruction, where the units rule beside it is arithmetic. I would rather have the structural guarantee, but there isn't one available here: the values are the informative part, so they cannot be stripped.
+
+Two other things bound it. The list is capped at twenty, newest first, because a prompt that grows with every correction ever made stops working somewhere around the hundredth document. And an analysis never sees its own corrections - those are about the document being read right now, not a previous one.
+
+Kept deliberately: corrections whose diagnosis the analyst rejected. A rejection means our explanation was wrong, not that the correction did not happen. The edge is real - the model may re-derive a conclusion a human turned down - but suppressing the evidence because we misread it once is worse.
+
+What this makes plain, and what I would say in an interview: this is the weakest-typed part of the learning loop. It is prose in a prompt, which is exactly the shape decision 22 exists to avoid for lessons. It earns its place by carrying information the typed path structurally cannot - cross-document patterns, and corrections that produced no lesson at all - and it is labelled as evidence rather than as a rule so that its status is legible to the model and to anyone reading the prompt.
