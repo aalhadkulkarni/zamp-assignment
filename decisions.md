@@ -426,3 +426,7 @@ Submitting corrections now appends an analyst message the same way uploading doc
 Stored structurally - field, from, to - rather than written into the message body as prose. The browser already formats a value in the review table, and having the server write "$462,090,073,000" into a string would put currency formatting in two places that would eventually disagree. It also keeps the record honest about what was typed: a value that is not a number is shown as entered rather than dressed up as money.
 
 One message for the batch, not one per field, for the same reason the batch is diagnosed together. Six values changed by the same factor is one thing that happened.
+
+The same evidence is on the lesson card itself, not only in the conversation. The card listed the fields a lesson was about but not what had happened to them, which asked the analyst to agree to a standing rule while going somewhere else to check what it was about. The corrections are attached to the lesson on the server rather than correlated in the browser, matched on the batch as well as the field - the same field can be corrected twice, and a lesson belongs to exactly one of those batches.
+
+The formatter is shared between the table, the conversation and the card. The same figure rendered three ways in three places is how a UI starts looking untrustworthy.

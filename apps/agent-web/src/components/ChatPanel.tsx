@@ -1,25 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { formatBytes } from '../files';
 import type { StoredMessage } from '../api';
+import { readable } from '../format';
 
-/**
- * The readable form of a corrected value, matching the review table.
- *
- * Non-numeric text is shown as typed. A field can hold anything the customer's
- * schema allows, and dressing "see note 7" up as currency would be a lie about
- * what was entered.
- */
-function readable(value: string): string {
-  if (value.trim() === '') return 'blank';
-  const asNumber = Number(value);
-  return Number.isFinite(asNumber)
-    ? asNumber.toLocaleString('en-US', {
-        style: 'currency',
-        currency: 'USD',
-        minimumFractionDigits: 0,
-      })
-    : value;
-}
 
 type Props = {
   messages: StoredMessage[];

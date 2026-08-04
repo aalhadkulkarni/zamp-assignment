@@ -28,6 +28,15 @@ export type StoredLesson = {
   unitsMultiplier: number | null;
   documentLabel: string;
   confidence: 'high' | 'medium' | 'low';
+  /**
+   * The corrections this lesson is about, with the values that changed.
+   *
+   * Carried on the lesson rather than left for the client to correlate with a
+   * chat message. The card is the thing being ratified, and a proposal that
+   * names a field without saying what happened to it is asking the analyst to
+   * agree to a rule while going somewhere else to check the evidence.
+   */
+  corrections: { fieldKey: string; from: string; to: string }[];
   decision?: 'accepted' | 'rejected';
   comment?: string;
 };
@@ -99,7 +108,7 @@ export async function getAnalysis(
   );
   if (rows.length === 0) return null;
 
-  const [messages, fields, lessons, correctionRows] = await Promise.all([
+  const [messages, fields, lessons, allCorrections, correctionRows] = await Promise.all([
     pool.query(
       `SELECT id, author, body, variant, fixture, attachments, corrections
          FROM message WHERE analysis_id = $1 ORDER BY seq`,
@@ -113,8 +122,16 @@ export async function getAnalysis(
     ),
     pool.query(
       `SELECT id, type, scope, field_keys, explanation, rule, units_multiplier,
-              document_label, confidence, decision, comment
+              document_label, confidence, decision, comment, batch_id
          FROM lesson WHERE analysis_id = $1 ORDER BY created_at`,
+      [analysisId],
+    ),
+    // Every correction on this analysis, so each lesson can be given the ones it
+    // explains. Matched on the batch as well as the field: the same field can be
+    // corrected in two batches, and a lesson belongs to exactly one of them.
+    pool.query(
+      `SELECT batch_id, field_key, from_value, to_value
+         FROM correction WHERE analysis_id = $1 ORDER BY created_at`,
       [analysisId],
     ),
     // The analyst's submitted corrections, newest per field. Without these the
@@ -182,7 +199,22 @@ export async function getAnalysis(
         ...(f.lesson_note ? { lessonNote: f.lesson_note as string } : {}),
       };
     }),
-    lessons: lessons.rows.map(toLesson),
+    lessons: lessons.rows.map((row) =>
+      toLesson(
+        row,
+        allCorrections.rows
+          .filter(
+            (c) =>
+              c.batch_id === row.batch_id &&
+              (row.field_keys as string[]).includes(c.field_key as string),
+          )
+          .map((c) => ({
+            fieldKey: c.field_key as string,
+            from: c.from_value as string,
+            to: c.to_value as string,
+          })),
+      ),
+    ),
   };
 }
 
@@ -393,7 +425,14 @@ export async function storeCorrections(
   }
 }
 
-export type ProposedLesson = Omit<StoredLesson, 'id' | 'decision' | 'comment'>;
+/**
+ * A lesson as the model proposes it — before we give it an id, and before the
+ * corrections it explains are attached back on read.
+ */
+export type ProposedLesson = Omit<
+  StoredLesson,
+  'id' | 'decision' | 'comment' | 'corrections'
+>;
 
 export async function storeLessons(
   tenantId: string,
@@ -527,7 +566,7 @@ export async function applicableLessons(
       ORDER BY type, created_at`,
     [tenantId, fundId],
   );
-  return rows.map(toLesson);
+  return rows.map((row) => toLesson(row));
 }
 
 function touch(analysisId: string): Promise<unknown> {
@@ -544,7 +583,10 @@ function toSummary(row: Record<string, unknown>): AnalysisSummary {
   };
 }
 
-function toLesson(row: Record<string, unknown>): StoredLesson {
+function toLesson(
+  row: Record<string, unknown>,
+  corrections: StoredLesson['corrections'] = [],
+): StoredLesson {
   return {
     id: row.id as string,
     type: row.type as LessonType,
@@ -555,6 +597,7 @@ function toLesson(row: Record<string, unknown>): StoredLesson {
     unitsMultiplier: numeric(row.units_multiplier),
     documentLabel: (row.document_label as string) ?? '',
     confidence: row.confidence as StoredLesson['confidence'],
+    corrections,
     ...(row.decision ? { decision: row.decision as 'accepted' | 'rejected' } : {}),
     ...(row.comment ? { comment: row.comment as string } : {}),
   };

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Lesson, LessonScope, LessonType } from '../api';
+import { readable } from '../format';
 
 type Props = {
   lesson: Lesson;
@@ -61,7 +62,27 @@ export default function LessonCard({ lesson, onAccept, onReject }: Props) {
 
       <p className="lesson-scope">{SCOPE_LABEL[lesson.scope]}</p>
 
-      <p className="lesson-fields subtle">{lesson.fieldKeys.join(', ')}</p>
+      {/* The evidence, on the card being ratified. A proposal that names a
+          field without saying what happened to it asks the analyst to agree to
+          a rule while going elsewhere to check what it is about. */}
+      {lesson.corrections.length > 0 ? (
+        <ul className="lesson-corrections">
+          {lesson.corrections.map((correction) => (
+            <li key={correction.fieldKey}>
+              <span className="correction-field">{correction.fieldKey}</span>
+              <span className="correction-change">
+                {readable(correction.from)} → {readable(correction.to)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        // A lesson can name no corrections at all — a slip the agent decided was
+        // not worth a rule names nothing on purpose.
+        lesson.fieldKeys.length > 0 && (
+          <p className="lesson-fields subtle">{lesson.fieldKeys.join(', ')}</p>
+        )
+      )}
 
       {rejecting ? (
         // The comment belongs on the lesson it refutes, not in the chat box.

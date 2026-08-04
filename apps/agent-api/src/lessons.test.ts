@@ -19,6 +19,7 @@ function lesson(overrides: Partial<StoredLesson>): StoredLesson {
     unitsMultiplier: null,
     documentLabel: '',
     confidence: 'high',
+    corrections: [],
     ...overrides,
   };
 }

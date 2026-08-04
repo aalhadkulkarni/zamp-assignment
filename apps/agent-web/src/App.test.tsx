@@ -780,6 +780,9 @@ describe('sending', () => {
       unitsMultiplier: 1,
       documentLabel: '',
       confidence: 'medium' as const,
+      corrections: [
+        { fieldKey: 'total_investments', from: '462090073000', to: '462090073' },
+      ],
     };
 
     async function corrected(diagnosis: unknown = { summary: 'Here is what I think went wrong.', lessons: [UNITS_LESSON] }) {
@@ -1422,6 +1425,9 @@ describe('while the agent is explaining a correction', () => {
     unitsMultiplier: 1,
     documentLabel: '',
     confidence: 'medium' as const,
+    corrections: [
+      { fieldKey: 'total_investments', from: '462090073000', to: '462090073' },
+    ],
   };
 
   async function writeWithACorrection() {
@@ -1556,5 +1562,62 @@ describe('the correction in the chat', () => {
     expect(
       within(screen.getByRole('log')).getByText('$462,090,073,000 → see note 7'),
     ).toBeInTheDocument();
+  });
+});
+
+/**
+ * The card is the thing being ratified, so the evidence has to be on it. A
+ * proposal that names a field without saying what happened to it asks the
+ * analyst to agree to a standing rule while going elsewhere to check what it is
+ * about.
+ */
+describe('the evidence on a lesson card', () => {
+  const LESSON = {
+    id: 'lesson-1',
+    type: 'units' as const,
+    scope: 'fund' as const,
+    fieldKeys: ['total_investments'],
+    explanation: 'I applied the thousands heading.',
+    rule: 'For this fund, treat the figures as being in 1,000s.',
+    unitsMultiplier: 1000,
+    documentLabel: '',
+    confidence: 'high' as const,
+    corrections: [{ fieldKey: 'total_investments', from: '462090073000', to: '462090073' }],
+  };
+
+  async function proposalShown(lesson: api.Lesson) {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    server.diagnoses({ summary: 'Here is what I think went wrong.', lessons: [lesson] });
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    await screen.findByText('Wrong units');
+    return user;
+  }
+
+  it('shows what the value was and what it became', async () => {
+    await proposalShown(LESSON);
+
+    const card = screen.getByText('Wrong units').closest('.lesson')!;
+    expect(within(card as HTMLElement).getByText('total_investments')).toBeInTheDocument();
+    expect(
+      within(card as HTMLElement).getByText('$462,090,073,000 → $462,090,073'),
+    ).toBeInTheDocument();
+  });
+
+  /** A slip the agent decided is not worth a rule names nothing, on purpose. */
+  it('names nothing when the lesson explains no correction', async () => {
+    await proposalShown({ ...LESSON, fieldKeys: [], corrections: [] });
+
+    const card = screen.getByText('Wrong units').closest('.lesson')!;
+    expect(card.querySelector('.lesson-corrections')).toBeNull();
+    expect(card.querySelector('.lesson-fields')).toBeNull();
   });
 });

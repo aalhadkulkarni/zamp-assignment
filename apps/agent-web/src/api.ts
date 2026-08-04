@@ -181,6 +181,8 @@ export type Lesson = {
   explanation: string;
   rule: string;
   confidence: 'high' | 'medium' | 'low';
+  /** The corrections this lesson explains, with the values that changed. */
+  corrections: { fieldKey: string; from: string; to: string }[];
   decision?: 'accepted' | 'rejected';
   comment?: string;
 };

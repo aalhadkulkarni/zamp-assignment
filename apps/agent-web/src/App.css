@@ -344,6 +344,22 @@
 }
 
 /* The edit itself, sitting directly above the agent's explanation of it. */
+.lesson-corrections {
+  list-style: none;
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.lesson-corrections li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
 .message-corrections {
   list-style: none;
   margin-top: 8px;
