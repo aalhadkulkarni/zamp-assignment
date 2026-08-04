@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { StoredAnalysis } from '../api';
 import type { EditEvent } from '../types';
 import ChatPanel from './ChatPanel';
+import Loading from './Loading';
 import Composer from './Composer';
 import LessonCard from './LessonCard';
 import PendingEdits from './PendingEdits';
@@ -41,6 +42,7 @@ export default function Workspace({
   onBack,
 }: Props) {
   const approved = analysis.status === 'approved';
+  const reading = analysis.extraction.state === 'running';
   const [fiscalYearEnd, setFiscalYearEnd] = useState(analysis.fiscalYearEnd);
   const editCount = Object.keys(edits).length;
 
@@ -63,6 +65,16 @@ export default function Workspace({
         <section className="chat" aria-label="Agent conversation">
           <ChatPanel messages={analysis.messages} />
 
+          {/* Where the agent's reply will appear, standing in for it until it
+              does. The upload was answered seconds ago; without this the chat
+              would sit unchanged for the length of a model call and look like
+              nothing had happened. */}
+          {reading && (
+            <div className="agent-working">
+              <Loading label="Reading your documents. This usually takes under a minute." />
+            </div>
+          )}
+
           {failure && (
             <p className="form-error chat-failure" role="alert">
               {failure}
@@ -83,11 +95,18 @@ export default function Workspace({
           )}
 
           {!approved && <PendingEdits edits={editEvents} />}
-          <Composer onSend={onSend} />
+          {/* A second upload while the first is still being read would be
+              refused by the server anyway. Saying so here is kinder than
+              letting them find out. */}
+          <Composer onSend={onSend} disabled={reading} disabledReason="The agent is still reading your last upload." />
         </section>
 
         <section className="review" aria-label="Extracted values">
-          {analysis.fields.length === 0 ? (
+          {analysis.fields.length === 0 && reading ? (
+            <div className="empty">
+              <Loading label="Looking for the values your schema asks for…" />
+            </div>
+          ) : analysis.fields.length === 0 ? (
             <div className="empty">
               <p>No values yet.</p>
               <p className="subtle">

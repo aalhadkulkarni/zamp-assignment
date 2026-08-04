@@ -49,7 +49,7 @@ export function getPool(): pg.Pool {
  * A dotted hostname means the internet: Render's external address, Neon,
  * Supabase. A bare host is Render's private network, and localhost is local.
  */
-function reachedOverPublicNetwork(connectionString: string): boolean {
+export function reachedOverPublicNetwork(connectionString: string): boolean {
   try {
     const { hostname } = new URL(connectionString);
     return hostname.includes('.') && hostname !== '127.0.0.1';
@@ -80,7 +80,15 @@ const SCHEMA = `
     fiscal_year_end text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     updated_at      timestamptz NOT NULL DEFAULT now(),
-    CHECK (status IN ('draft', 'approved'))
+    -- Extraction state is deliberately a separate axis from status. An analysis
+    -- is a draft whether or not the agent happens to be reading a document for
+    -- it right now, and folding a transient job into the lifecycle would mean a
+    -- crash left an analysis permanently in a state it cannot leave.
+    extraction_state      text NOT NULL DEFAULT 'idle',
+    extraction_error      text,
+    extraction_started_at timestamptz,
+    CHECK (status IN ('draft', 'approved')),
+    CHECK (extraction_state IN ('idle', 'running', 'failed'))
   );
 
   -- The pages, not a path to them. Render's filesystem is wiped on every
@@ -180,6 +188,9 @@ const SCHEMA = `
   ALTER TABLE lesson ADD COLUMN IF NOT EXISTS units_multiplier numeric;
   ALTER TABLE lesson ADD COLUMN IF NOT EXISTS document_label text NOT NULL DEFAULT '';
   ALTER TABLE extracted_field ADD COLUMN IF NOT EXISTS lesson_note text;
+  ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_state text NOT NULL DEFAULT 'idle';
+  ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_error text;
+  ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_started_at timestamptz;
 `;
 
 export async function migrate(): Promise<void> {

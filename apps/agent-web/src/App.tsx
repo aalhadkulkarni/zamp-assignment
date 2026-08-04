@@ -8,6 +8,7 @@ import {
   listAnalyses,
   submitEdits,
   uploadDocuments,
+  watchAnalysis,
   writeReport,
   type AnalysisSummary,
   type Fund,
@@ -154,12 +155,26 @@ export default function App() {
     await Promise.all([load(created.id), refreshList()]);
   }
 
+  /**
+   * Watches the open analysis for changes the browser did not cause.
+   *
+   * The extraction runs after its upload has already been answered, so the only
+   * way its result arrives is this. Re-reading the whole analysis on every event
+   * is deliberate — the event says something moved, not what, and one fetch is
+   * cheaper than two representations that can disagree.
+   */
+  useEffect(() => {
+    if (view.name !== 'analysis') return;
+    return watchAnalysis(view.id, () => void load(view.id));
+  }, [view, load]);
+
   async function send(text: string, files: File[]): Promise<boolean> {
     if (!current) return false;
     try {
       await uploadDocuments(current.id, current.fundId, files, text);
-      // The server wrote the conversation and the values. Re-read them rather
-      // than assembling a second copy here that could drift from it.
+      // The upload is accepted, not finished. This re-read picks up the
+      // analyst's own message and the extraction now marked as running; the
+      // result itself arrives later, over the event stream.
       await load(current.id);
       setEdits({});
       setEditEvents([]);

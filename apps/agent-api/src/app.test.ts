@@ -91,12 +91,7 @@ beforeEach(() => {
   // on every assertion would just make the suite slower.
   process.env.FIXTURE_DELAY_MS = '0';
   process.env.ANTHROPIC_API_KEY = 'sk-ant-test';
-  create.mockResolvedValue({
-    model: 'claude-opus-5',
-    stop_reason: 'end_turn',
-    content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
-    usage: { input_tokens: 24180, output_tokens: 742 },
-  });
+  create.mockResolvedValue(EXTRACTION_REPLY);
 });
 
 beforeEach(async () => {
@@ -151,6 +146,13 @@ function lastCall(): { messages: any; output_config: any } {
   return call[0];
 }
 
+const EXTRACTION_REPLY = {
+  model: 'claude-opus-5',
+  stop_reason: 'end_turn',
+  content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+  usage: { input_tokens: 24180, output_tokens: 742 },
+};
+
 function pdf(name: string, size = 64): File {
   return new File([new Uint8Array(size)], name, { type: 'application/pdf' });
 }
@@ -185,7 +187,42 @@ async function upload(
     method: 'POST',
     body: form,
   });
-  return { status: response.status, body: await response.json() };
+  const body = await response.json();
+
+  // The upload now answers before the extraction runs, so a test that wants to
+  // assert on what was extracted has to wait for it. Settling here rather than
+  // in each test keeps every assertion about the outcome rather than the timing.
+  const analysis = response.status === 202 ? await settled(body.analysisId) : null;
+  return { status: response.status, body, analysis };
+}
+
+/**
+ * Waits for the background extraction to stop running, and returns the analysis.
+ *
+ * Polled rather than awaiting the change notification, because with a zero
+ * fixture delay the extraction can finish before the upload's own response has
+ * been read — and a listener attached after the fact waits forever.
+ */
+async function settled(analysisId: string) {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    const res = await app.inject({ method: 'GET', url: `/analyses/${analysisId}` });
+    const analysis = res.json();
+    if (analysis.extraction?.state !== 'running') return analysis;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('The extraction never finished.');
+}
+
+/** The agent's last word, which used to arrive in the upload's own response. */
+type StoredMessage = {
+  author: string;
+  text: string;
+  variant?: string;
+  fixture?: boolean;
+};
+
+function lastAgentMessage(analysis: { messages: StoredMessage[] }) {
+  return [...analysis.messages].reverse().find((m) => m.author === 'agent');
 }
 
 describe('health', () => {
@@ -200,7 +237,7 @@ describe('POST /analyses/:analysisId/documents', () => {
   it('stores the documents and reports what it kept', async () => {
     const { status, body } = await upload([pdf('acfr.pdf', 128), pdf('notes.md', 32)]);
 
-    expect(status).toBe(200);
+    expect(status).toBe(202);
     expect(body.analysisId).toBe(ANALYSIS);
     expect(body.uploadId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.documents).toEqual([
@@ -260,7 +297,7 @@ describe('POST /analyses/:analysisId/documents', () => {
 
   it('accepts an upload with no prompt', async () => {
     const { status, body } = await upload([pdf('acfr.pdf')]);
-    expect(status).toBe(200);
+    expect(status).toBe(202);
     expect(body.prompt).toBe('');
   });
 
@@ -321,18 +358,57 @@ describe('POST /analyses/:analysisId/documents', () => {
     expect(response.status).toBe(415);
   });
 
-  it('returns the summary and the extracted rows alongside the documents', async () => {
+  /**
+   * 202, not 200. The documents are stored and the work has started, which is a
+   * different promise from "here is your answer" — and the difference is the
+   * whole reason the composer no longer waits on a model call.
+   */
+  it('accepts the upload before the extraction has run', async () => {
     const { status, body } = await upload([pdf('acfr.pdf')]);
 
-    expect(status).toBe(200);
-    expect(body.agentError).toBeNull();
-    expect(body.agent).toMatchObject({
-      model: 'claude-opus-5',
-      summary: expect.stringContaining('investments total'),
-      usage: { inputTokens: 24180, outputTokens: 742 },
-      fixture: false,
+    expect(status).toBe(202);
+    expect(body).toMatchObject({ analysisId: ANALYSIS, uploadId: expect.any(String) });
+    // Nothing about what was found: that is not known yet.
+    expect(body.agent).toBeUndefined();
+  });
+
+  /** The analyst's own message is a thing that has already happened. */
+  it('records what the analyst sent before the agent has answered', async () => {
+    let released!: () => void;
+    const held = new Promise<void>((resolve) => {
+      released = resolve;
     });
-    expect(body.agent.fields).toHaveLength(2);
+    create.mockImplementationOnce(async () => {
+      await held;
+      return EXTRACTION_REPLY;
+    });
+
+    await new Promise<void>((done) => {
+      const form = new FormData();
+      form.set('fundId', 'calpers');
+      form.set('prompt', 'Statement of fiduciary net position.');
+      form.append('documents', pdf('acfr.pdf'), 'acfr.pdf');
+      void fetch(`${baseUrl}/analyses/${ANALYSIS}/documents`, { method: 'POST', body: form })
+        .then(() => done());
+    });
+
+    const midFlight = (await app.inject({ method: 'GET', url: `/analyses/${ANALYSIS}` })).json();
+    expect(midFlight.extraction.state).toBe('running');
+    expect(midFlight.messages.at(-1)).toMatchObject({
+      author: 'analyst',
+      text: 'Statement of fiduciary net position.',
+    });
+
+    released();
+    await settled(ANALYSIS);
+  });
+
+  it('extracts the rows and says what it found', async () => {
+    const { analysis } = await upload([pdf('acfr.pdf')]);
+
+    expect(analysis.extraction).toEqual({ state: 'idle', error: null });
+    expect(lastAgentMessage(analysis)?.text).toContain('investments total');
+    expect(analysis.fields).toHaveLength(2);
   });
 
   /**
@@ -340,20 +416,18 @@ describe('POST /analyses/:analysisId/documents', () => {
    * is ours. This is the assertion that keeps it that way.
    */
   it('applies the document units rather than asking the model to', async () => {
-    const { body } = await upload([pdf('acfr.pdf')]);
+    const { analysis } = await upload([pdf('acfr.pdf')]);
 
-    const investments = body.agent.fields.find(
-      (f: { key: string }) => f.key === 'total_investments',
-    );
+    const investments = analysis.fields.find((f: { key: string }) => f.key === 'total_investments');
     expect(investments.valueAsPrinted).toBe(462_090_073);
     expect(investments.unitsMultiplier).toBe(1000);
     expect(investments.value).toBe(462_090_073_000);
   });
 
   it('leaves a value the model could not find as null, not zero', async () => {
-    const { body } = await upload([pdf('acfr.pdf')]);
+    const { analysis } = await upload([pdf('acfr.pdf')]);
 
-    const missing = body.agent.fields.find((f: { key: string }) => f.key === 'net_position');
+    const missing = analysis.fields.find((f: { key: string }) => f.key === 'net_position');
     expect(missing.value).toBeNull();
     expect(missing.confidence).toBe('low');
   });
@@ -404,16 +478,30 @@ describe('POST /analyses/:analysisId/documents', () => {
       return upload([pdf('acfr.pdf', 128)]);
     }
 
-    it('still reports the upload as succeeded, with the reason attached', async () => {
-      const { status, body } = await failWith(await sdkError('RateLimitError', 429));
+    it('still reports the upload as accepted, and records why the reading failed', async () => {
+      const { status, body, analysis } = await failWith(await sdkError('RateLimitError', 429));
 
-      expect(status).toBe(200);
+      // The documents are safe, which is what the upload was about.
+      expect(status).toBe(202);
       expect(body.documents).toHaveLength(1);
-      expect(body.agent).toBeNull();
-      expect(body.agentError).toEqual({
-        code: 'RateLimited',
-        message: expect.stringMatching(/rate limiting/i),
-      });
+
+      // The failure belongs to the extraction, and is on the analysis.
+      expect(analysis.extraction.state).toBe('failed');
+      expect(analysis.extraction.error).toMatch(/rate limiting/i);
+    });
+
+    /**
+     * The browser is waiting on a notification, not a response. A failure that
+     * only reached a log would leave it waiting forever, so it has to arrive by
+     * the same route a success does.
+     */
+    it('tells the analyst in the conversation, not only in the state', async () => {
+      const { analysis } = await failWith(await sdkError('RateLimitError', 429));
+
+      const said = lastAgentMessage(analysis);
+      expect(said?.variant).toBe('error');
+      expect(said?.text).toContain('Your documents are stored');
+      expect(said?.text).toMatch(/rate limiting/i);
     });
 
     it('still stores the documents', async () => {
@@ -428,11 +516,11 @@ describe('POST /analyses/:analysisId/documents', () => {
 
     it('names a missing API key rather than blaming the upload', async () => {
       delete process.env.ANTHROPIC_API_KEY;
-      const { status, body } = await upload([pdf('acfr.pdf')]);
+      const { status, body, analysis } = await upload([pdf('acfr.pdf')]);
 
-      expect(status).toBe(200);
-      expect(body.agentError.code).toBe('NotConfigured');
+      expect(status).toBe(202);
       expect(body.documents).toHaveLength(1);
+      expect(analysis.extraction.error).toMatch(/no Anthropic API key/i);
     });
 
     it('reports a refusal as its own outcome', async () => {
@@ -444,8 +532,16 @@ describe('POST /analyses/:analysisId/documents', () => {
         usage: { input_tokens: 5, output_tokens: 0 },
       });
 
-      const { body } = await upload([pdf('acfr.pdf')]);
-      expect(body.agentError.code).toBe('ModelRefused');
+      const { analysis } = await upload([pdf('acfr.pdf')]);
+      expect(analysis.extraction.state).toBe('failed');
+      expect(analysis.extraction.error).toMatch(/declined to answer/i);
+    });
+
+    /** Failed, not stuck. A spinner with nothing behind it is the worst outcome. */
+    it('never leaves the extraction running after a failure', async () => {
+      const { analysis } = await failWith(new Error('something nobody predicted'));
+      expect(analysis.extraction.state).toBe('failed');
+      expect(analysis.extraction.error).toBeTruthy();
     });
   });
 
@@ -456,12 +552,12 @@ describe('POST /analyses/:analysisId/documents', () => {
   describe('fixture mode', () => {
     it('answers from the recording without calling the API', async () => {
       process.env.USE_FIXTURES = 'true';
-      const { status, body } = await upload([pdf('acfr.pdf')]);
+      const { status, analysis } = await upload([pdf('acfr.pdf')]);
 
-      expect(status).toBe(200);
-      expect(body.agent.fixture).toBe(true);
-      expect(body.agent.summary).toMatch(/statement of fiduciary net position/i);
-      expect(body.agent.fields).toHaveLength(5);
+      expect(status).toBe(202);
+      expect(lastAgentMessage(analysis)?.fixture).toBe(true);
+      expect(lastAgentMessage(analysis)?.text).toMatch(/statement of fiduciary net position/i);
+      expect(analysis.fields).toHaveLength(5);
       expect(create).not.toHaveBeenCalled();
     });
 
@@ -469,10 +565,10 @@ describe('POST /analyses/:analysisId/documents', () => {
       process.env.USE_FIXTURES = 'true';
       delete process.env.ANTHROPIC_API_KEY;
 
-      const { status, body } = await upload([pdf('acfr.pdf')]);
-      expect(status).toBe(200);
-      expect(body.agentError).toBeNull();
-      expect(body.agent.fixture).toBe(true);
+      const { status, analysis } = await upload([pdf('acfr.pdf')]);
+      expect(status).toBe(202);
+      expect(analysis.extraction).toEqual({ state: 'idle', error: null });
+      expect(lastAgentMessage(analysis)?.fixture).toBe(true);
     });
 
     it('still stores the documents', async () => {
@@ -486,17 +582,17 @@ describe('POST /analyses/:analysisId/documents', () => {
     });
 
     it('is off unless explicitly switched on', async () => {
-      const { body } = await upload([pdf('acfr.pdf')]);
+      const { analysis } = await upload([pdf('acfr.pdf')]);
 
-      expect(body.agent.fixture).toBe(false);
+      expect(lastAgentMessage(analysis)?.fixture).toBeUndefined();
       expect(create).toHaveBeenCalledOnce();
     });
 
     it('is not switched on by a value that merely looks truthy', async () => {
       process.env.USE_FIXTURES = '1';
-      const { body } = await upload([pdf('acfr.pdf')]);
+      const { analysis } = await upload([pdf('acfr.pdf')]);
 
-      expect(body.agent.fixture).toBe(false);
+      expect(lastAgentMessage(analysis)?.fixture).toBeUndefined();
       expect(create).toHaveBeenCalledOnce();
     });
   });
@@ -511,7 +607,7 @@ describe('POST /analyses/:analysisId/documents', () => {
       new File([new Uint8Array(64)], '../../../etc/passwd.pdf', { type: 'application/pdf' }),
     ]);
 
-    expect(status).toBe(200);
+    expect(status).toBe(202);
     expect(body.documents[0].filename).not.toContain('..');
   });
 });
@@ -927,13 +1023,13 @@ describe('applying what was learned', () => {
       content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
       usage: { input_tokens: 100, output_tokens: 10 },
     });
-    const { body } = await upload([pdf('next-year.pdf')], {
+    const { analysis } = await upload([pdf('next-year.pdf')], {
       analysisId: created.json().id,
       fundId,
     });
     const { messages, output_config } = lastCall();
     return {
-      body,
+      analysis,
       prompt: messages[0].content.at(-1).text,
       schema: output_config.format.schema,
     };
@@ -992,11 +1088,9 @@ describe('applying what was learned', () => {
    */
   it('enforces a ratified units lesson after the model has answered', async () => {
     await ratify({ ...SYNONYM, type: 'units', unitsMultiplier: 1, documentLabel: '' });
-    const { body, prompt, schema } = await nextDocument();
+    const { analysis, prompt, schema } = await nextDocument();
 
-    const investments = body.agent.fields.find(
-      (f: { key: string }) => f.key === 'total_investments',
-    );
+    const investments = analysis.fields.find((f: { key: string }) => f.key === 'total_investments');
     // The model still said 1000. We did not ask it again; we overruled it.
     expect(investments.value).toBe(462_090_073);
     expect(investments.lessonNote).toMatch(/you confirmed/i);
@@ -1007,10 +1101,8 @@ describe('applying what was learned', () => {
 
   it('says in the chat what it applied', async () => {
     await ratify(SYNONYM);
-    const { analysisId } = (await nextDocument()).body;
-
-    const stored = await app.inject({ method: 'GET', url: `/analyses/${analysisId}` });
-    const agentSaid = stored.json().messages.at(-1).text;
+    const { analysis } = await nextDocument();
+    const agentSaid = lastAgentMessage(analysis)!.text;
     expect(agentSaid).toContain('1 label you told me to recognise');
     // Ahead of the findings, not buried after them.
     expect(agentSaid.indexOf('applied')).toBeLessThan(agentSaid.indexOf('I found'));
@@ -1047,11 +1139,11 @@ describe('applying what was learned', () => {
   /** A slip is not a rule. Nothing about a typo should survive the ratification. */
   it('learns nothing from a typo, even when accepted', async () => {
     await ratify({ ...SYNONYM, type: 'typo', scope: 'none', documentLabel: '', rule: '' });
-    const { body, prompt, schema } = await nextDocument();
+    const { analysis, prompt, schema } = await nextDocument();
 
     expect(schema.properties.fields.properties.net_position.description).not.toContain('Fiduciary Balance');
     expect(prompt).not.toContain('confirmed these rules');
-    expect(body.agent.summary).not.toContain('you have confirmed');
+    expect(lastAgentMessage(analysis)?.text).not.toContain('you have confirmed');
   });
 
   it('survives a restart, because the lesson is in the database', async () => {
@@ -1260,5 +1352,151 @@ describe('what the analyst has changed before', () => {
     const prompt = await afterCorrecting();
 
     expect(prompt.match(/, corrected /g)).toHaveLength(20);
+  });
+});
+
+/**
+ * The stream the browser waits on instead of holding a request open.
+ *
+ * Read with fetch rather than EventSource, which does not exist in Node. What
+ * matters here is the wire format, since that is the contract EventSource
+ * parses — the event names and the blank line that terminates each frame.
+ */
+describe('GET /analyses/:analysisId/events', () => {
+  async function openStream(analysisId = ANALYSIS) {
+    const controller = new AbortController();
+    const response = await fetch(`${baseUrl}/analyses/${analysisId}/events`, {
+      signal: controller.signal,
+    });
+    const reader = response.body!.getReader();
+    const decoder = new TextDecoder();
+
+    return {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      /**
+       * Reads until the wanted event name shows up, or gives up.
+       *
+       * The read is raced against the deadline rather than checked before it:
+       * a stream with nothing to say leaves read() pending forever, so a loop
+       * that only tests the clock between reads never gets to test it again.
+       */
+      async waitFor(event: string, timeoutMs = 3000) {
+        const deadline = Date.now() + timeoutMs;
+        let buffered = '';
+        for (;;) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) break;
+
+          const chunk = await Promise.race([
+            reader.read(),
+            new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), remaining)),
+          ]);
+          if (chunk === 'timeout' || chunk.done) break;
+
+          buffered += decoder.decode(chunk.value, { stream: true });
+          if (buffered.includes(`event: ${event}`)) return buffered;
+        }
+        throw new Error(`Never saw "${event}". Got: ${JSON.stringify(buffered)}`);
+      },
+      close: () => controller.abort(),
+    };
+  }
+
+  it('is an event stream, and says so before anything has happened', async () => {
+    const stream = await openStream();
+
+    expect(stream.status).toBe(200);
+    expect(stream.contentType).toContain('text/event-stream');
+
+    // Sent on connect, so the browser knows the stream is live rather than
+    // inferring it from the absence of anything.
+    const frame = await stream.waitFor('open');
+    expect(frame).toContain(`"analysisId":"${ANALYSIS}"`);
+    expect(frame.endsWith('\n\n')).toBe(true);
+
+    stream.close();
+  });
+
+  /** The whole point: the result arrives without the client asking again. */
+  it('announces the extraction finishing', async () => {
+    const stream = await openStream();
+    await stream.waitFor('open');
+
+    await upload([pdf('acfr.pdf')]);
+
+    const frame = await stream.waitFor('changed');
+    expect(frame).toContain(`"analysisId":"${ANALYSIS}"`);
+    stream.close();
+  });
+
+  /** A failed extraction has to wake the browser too, or it waits forever. */
+  it('announces a failure the same way it announces a result', async () => {
+    const stream = await openStream();
+    await stream.waitFor('open');
+
+    create.mockRejectedValue(await sdkError('RateLimitError', 429));
+    await upload([pdf('acfr.pdf')]);
+
+    expect(await stream.waitFor('changed')).toContain('changed');
+    stream.close();
+  });
+
+  it('does not tell one analysis about another', async () => {
+    const other = await app.inject({
+      method: 'POST',
+      url: '/analyses',
+      payload: { fundId: 'calstrs' },
+    });
+    const stream = await openStream(other.json().id);
+    await stream.waitFor('open');
+
+    await upload([pdf('acfr.pdf')]);
+
+    await expect(stream.waitFor('changed', 400)).rejects.toThrow(/Never saw/);
+    stream.close();
+  });
+
+  it('refuses to stream an analysis that does not exist', async () => {
+    const response = await fetch(`${baseUrl}/analyses/${crypto.randomUUID()}/events`);
+    expect(response.status).toBe(404);
+    expect((await response.json()).error).toBe('UnknownAnalysis');
+  });
+});
+
+describe('one extraction at a time', () => {
+  it('refuses a second upload while the first is still being read', async () => {
+    let released!: () => void;
+    const held = new Promise<void>((resolve) => {
+      released = resolve;
+    });
+    create.mockImplementationOnce(async () => {
+      await held;
+      return EXTRACTION_REPLY;
+    });
+
+    const form = new FormData();
+    form.set('fundId', 'calpers');
+    form.set('prompt', '');
+    form.append('documents', pdf('first.pdf'), 'first.pdf');
+    await fetch(`${baseUrl}/analyses/${ANALYSIS}/documents`, { method: 'POST', body: form });
+
+    const { status, body } = await upload([pdf('second.pdf')]);
+    expect(status).toBe(409);
+    expect(body.error).toBe('ExtractionInProgress');
+
+    released();
+    await settled(ANALYSIS);
+  });
+
+  /** Failed is a finished state; the analyst has to be able to try again. */
+  it('allows another attempt once a failed one has finished', async () => {
+    create.mockRejectedValueOnce(await sdkError('RateLimitError', 429));
+    const first = await upload([pdf('acfr.pdf')]);
+    expect(first.analysis.extraction.state).toBe('failed');
+
+    const second = await upload([pdf('acfr.pdf')]);
+    expect(second.status).toBe(202);
+    expect(second.analysis.extraction.state).toBe('idle');
   });
 });

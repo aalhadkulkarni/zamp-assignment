@@ -1,13 +1,12 @@
 import { extname } from 'node:path';
 import Fastify from 'fastify';
+import type { OutgoingHttpHeaders } from 'node:http';
 import cors from '@fastify/cors';
 import multipart from '@fastify/multipart';
 import {
   describeFailure,
   diagnose,
   diagnoseFixture,
-  extract,
-  extractFixture,
   usingFixtures,
   type ModelFailure,
 } from './anthropic.js';
@@ -32,21 +31,19 @@ import {
 import {
   analysisFund,
   appendMessages,
-  applicableLessons,
+  beginExtraction,
   createAnalysis,
-  previousCorrections,
   decideLesson,
   getAnalysis,
   listAnalyses,
   markApproved,
-  replaceFields,
   storeCorrections,
   storeLessons,
 } from './analyses.js';
 import { diagnosisSchema, type Diagnosis } from './diagnosis.js';
-import { extractionSchema, toReviewFields, type ReviewField } from './extraction.js';
-import { diagnosisPrompt, extractionPrompt } from './prompts.js';
-import { describePlan, EMPTY_PLAN, planLessons } from './lessons.js';
+import { runExtraction } from './extractionRun.js';
+import { onAnalysisChanged } from './events.js';
+import { diagnosisPrompt } from './prompts.js';
 import { resolveTenant } from './tenant.js';
 
 /**
@@ -84,15 +81,6 @@ function coerce(
 
   return out;
 }
-
-/** What the analyst gets back: prose for the chat, rows for the table. */
-type ExtractionResult = {
-  model: string;
-  summary: string;
-  fields: ReviewField[];
-  usage: { inputTokens: number; outputTokens: number };
-  fixture: boolean;
-};
 
 export async function buildApp() {
   // Quiet under test, on everywhere else. Without this the warning logged when
@@ -158,6 +146,74 @@ export async function buildApp() {
     }
     return analysis;
   });
+
+  /**
+   * Tells a browser when an analysis has changed, so it can re-read it.
+   *
+   * Server-sent events rather than WebSockets: everything here goes one way,
+   * server to client, and EventSource brings its own reconnection. A socket
+   * would add an upgrade handshake, heartbeats and a reconnect loop of our own
+   * writing to buy a direction we never send in.
+   *
+   * The event carries no payload beyond "something changed". The client already
+   * has a way to fetch an analysis, and one description of an analysis that both
+   * sides agree on beats two that can drift apart.
+   */
+  app.get<{ Params: { analysisId: string } }>(
+    '/analyses/:analysisId/events',
+    async (request, reply) => {
+      const analysisId = request.params.analysisId;
+      const analysis = await getAnalysis(resolveTenant(request), analysisId);
+      if (!analysis) {
+        return reply.code(404).send({ error: 'UnknownAnalysis', message: 'No such analysis.' });
+      }
+
+      // Writing to reply.raw bypasses the Fastify reply, and with it every
+      // header a plugin has staged there — including the CORS headers, without
+      // which a browser opens this stream and then silently discards it. Node's
+      // tests never caught it: same-origin fetch does not need them.
+      reply.raw.writeHead(200, {
+        ...(reply.getHeaders() as OutgoingHttpHeaders),
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+        // Nginx and friends buffer responses by default, which for a stream
+        // means holding every event until it has enough of them to be worth
+        // sending. Render's proxy is one of them.
+        'X-Accel-Buffering': 'no',
+      });
+
+      const send = (event: string, data: string) => {
+        // A dead socket is the normal end of an SSE response, not an error.
+        if (!reply.raw.writableEnded) reply.raw.write(`event: ${event}\ndata: ${data}\n\n`);
+      };
+
+      // Immediately, so the browser knows the stream is live rather than
+      // guessing from the absence of anything.
+      send('open', JSON.stringify({ analysisId }));
+
+      const unsubscribe = onAnalysisChanged(analysisId, () =>
+        send('changed', JSON.stringify({ analysisId })),
+      );
+
+      // A comment line is valid SSE that no handler fires for. Proxies close
+      // connections they think are idle, and this is what stops them.
+      const heartbeat = setInterval(() => {
+        if (!reply.raw.writableEnded) reply.raw.write(': keep-alive\n\n');
+      }, 25_000);
+
+      const close = () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      };
+      request.raw.on('close', close);
+      reply.raw.on('close', close);
+
+      // Fastify would otherwise send its own response over the top of the
+      // stream we are writing by hand.
+      return reply;
+    },
+  );
 
   /**
    * Nothing becomes a rule without this. Recorded against the one lesson it
@@ -381,7 +437,6 @@ export async function buildApp() {
       const documents: IncomingDocument[] = [];
       let prompt = '';
       let fundId = '';
-      let fundName = '';
 
       try {
         for await (const part of request.parts()) {
@@ -461,98 +516,48 @@ export async function buildApp() {
         });
       }
 
-      const { uploadId, stored } = await storeUpload(analysisId, documents, prompt);
-
-      // The documents are on disk by this point, so a model failure must not be
-      // reported as a failed upload — the analyst would re-send files we already
-      // have. The upload is a 200 either way; extraction is a separate field
-      // that may be missing, with the reason alongside it.
-      let agent: ExtractionResult | null = null;
-      let agentError: ModelFailure | null = null;
-      let plan = EMPTY_PLAN;
-
-      // Chosen per request rather than at startup, so a test can flip the flag
-      // without rebuilding the app.
-      const run = usingFixtures() ? extractFixture : extract;
-      try {
-        // The field list comes from the customer, not from us and not from the
-        // browser. It is their contract, and a client that could choose it could
-        // choose what ends up in their database. The fund's name is theirs too —
-        // the browser sends an id, never a label we then repeat back as fact.
-        const [definitions, ratified, history] = await Promise.all([
-          listFieldDefinitions(),
-          // Everything an analyst has confirmed that applies to this fund. This
-          // is the query the database exists for, and this is where the loop
-          // closes: a correction made on one document changes how the next one
-          // is read.
-          applicableLessons(resolveTenant(request), owner.fundId),
-          // Raw evidence alongside the ratified rules. See previousCorrections
-          // for why the two are fetched and rendered separately.
-          previousCorrections(resolveTenant(request), owner.fundId, analysisId),
-        ]);
-        fundName = owner.fundName;
-
-        // Each type goes somewhere different — the schema, the prompt, or the
-        // arithmetic below. See lessons.ts for why that separation is the point.
-        plan = planLessons(ratified);
-
-        const reply_ = await run(
-          extractionPrompt(fundName, definitions, prompt, plan.navigation, history),
-          documents.map((doc) => ({
-            filename: doc.filename,
-            extension: extname(doc.filename).toLowerCase(),
-            bytes: doc.bytes,
-          })),
-          extractionSchema(definitions, plan.guidance) as unknown as Record<string, unknown>,
-        );
-
-        agent = {
-          model: reply_.model,
-          summary: reply_.extraction.summary,
-          // The multiplication happens here, not in the model, and a ratified
-          // units lesson is enforced here too. See applyUnits.
-          fields: toReviewFields(reply_.extraction, plan.expectedMultiplier),
-          usage: reply_.usage,
-          fixture: reply_.fixture,
-        };
-      } catch (error) {
-        agentError =
-          error instanceof CustomerSystemError
-            ? { code: 'CustomerSystemUnavailable', message: error.message }
-            : describeFailure(error);
-        if (!agentError) throw error;
-        request.log.warn({ err: error }, 'extraction failed after storing documents');
+      // One extraction at a time. Claimed before anything is stored so that two
+      // uploads arriving together cannot both go on to rewrite the same fields.
+      if (!(await beginExtraction(analysisId))) {
+        return reply.code(409).send({
+          error: 'ExtractionInProgress',
+          message: 'I am still reading the last set of documents. Give me a moment.',
+        });
       }
 
-      // The conversation and the values are the analysis. Held only in the
-      // browser they died on refresh, which made "resume a draft" a promise the
-      // code did not keep.
+      const { uploadId, stored } = await storeUpload(analysisId, documents, prompt);
+
+      // The analyst's own message goes in now, not when the agent answers. It is
+      // a thing that has already happened, and holding it back until the model
+      // replies is what made the composer sit on "Sending…" with nothing on
+      // screen to show for it.
       await appendMessages(analysisId, [
         {
           author: 'analyst',
           text: prompt,
           attachments: stored.map((d) => ({ name: d.filename, size: d.size })),
         },
-        agent
-          ? {
-              author: 'agent',
-              // What was applied goes ahead of what was found. An analyst who
-              // ratified a rule needs to see it act, or a value that is now
-              // right looks like luck.
-              text: [describePlan(plan), agent.summary].filter(Boolean).join('\n\n'),
-              fixture: agent.fixture,
-            }
-          : {
-              author: 'agent',
-              text: `Your documents are stored, but extraction failed. ${agentError?.message ?? ''}`.trim(),
-              variant: 'error' as const,
-            },
       ]);
-      if (agent) await replaceFields(analysisId, agent.fields);
 
+      // Deliberately not awaited. Everything past this point takes as long as a
+      // model call, and the request is answered now — the browser hears about
+      // the result over its event stream. runExtraction never throws; every
+      // outcome is recorded on the analysis and announced.
+      void runExtraction({
+        analysisId,
+        tenantId: resolveTenant(request),
+        fundId: owner.fundId,
+        fundName: owner.fundName,
+        prompt,
+        documents,
+        log: request.log,
+      });
+
+      // 202: accepted, not completed. The documents are stored and the work is
+      // under way, which is a different promise from "here is your answer".
       return reply
-        .code(200)
-        .send({ uploadId, analysisId, fundId, prompt, documents: stored, agent, agentError });
+        .code(202)
+        .send({ uploadId, analysisId, fundId: owner.fundId, prompt, documents: stored });
     },
   );
 

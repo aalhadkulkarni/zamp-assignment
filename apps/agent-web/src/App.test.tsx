@@ -16,6 +16,7 @@ vi.mock('./api', async (importOriginal) => ({
   writeReport: vi.fn(),
   submitEdits: vi.fn(),
   decideLesson: vi.fn(),
+  watchAnalysis: vi.fn(),
 }));
 
 const mockListFunds = vi.mocked(api.listFunds);
@@ -64,10 +65,26 @@ const FIELDS: api.ReviewField[] = [
 const server = {
   analyses: new Map<string, api.StoredAnalysis>(),
 
+  /**
+   * Whoever is currently listening for changes to an analysis, keyed by id.
+   * Standing in for the SSE connection, so a test can make the server "push".
+   */
+  watchers: new Map<string, () => void>(),
+
+  /** Whether an extraction lands on its own. See restoreUpload. */
+  autoFinish: true,
+
   reset() {
     server.analyses.clear();
+    server.watchers.clear();
     server.nextFields = FIELDS;
+    server.autoFinish = true;
     server.restoreUpload();
+
+    vi.mocked(api.watchAnalysis).mockImplementation((analysisId, onChange) => {
+      server.watchers.set(analysisId, onChange);
+      return () => server.watchers.delete(analysisId);
+    });
 
     mockListFunds.mockResolvedValue(FUNDS);
     vi.mocked(api.listAnalyses).mockImplementation(async () => [...server.analyses.values()]);
@@ -83,6 +100,7 @@ const server = {
         fundName: FUNDS.find((f) => f.id === fundId)!.name,
         status: 'draft',
         createdAt: new Date().toISOString(),
+        extraction: { state: 'idle', error: null },
         fiscalYearEnd: '',
         messages: [{ id: 'm0', author: 'agent', text: 'Upload the documents you want analysed.' }],
         fields: [],
@@ -119,34 +137,68 @@ const server = {
     });
   },
 
+  /**
+   * The upload only accepts. It records what the analyst sent and marks the
+   * extraction running, exactly as a 202 does — the agent's reply arrives as a
+   * separate event, which is the behaviour under test.
+   */
   restoreUpload() {
     mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => {
       const analysis = server.analyses.get(analysisId)!;
-      analysis.messages.push(
-        {
-          id: crypto.randomUUID(),
-          author: 'analyst',
-          text: prompt,
-          attachments: files.map((f) => ({ name: f.name, size: f.size })),
-        },
-        { id: crypto.randomUUID(), author: 'agent', text: AGENT_TEXT },
-      );
-      analysis.fields = structuredClone(server.nextFields);
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'analyst',
+        text: prompt,
+        attachments: files.map((f) => ({ name: f.name, size: f.size })),
+      });
+      analysis.extraction = { state: 'running', error: null };
+
+      // Most tests are about what happens once the values are in, so the
+      // extraction lands on its own a tick later — the same shape as the real
+      // thing, without the wait. A test that wants to watch the gap calls
+      // holdExtraction() and finishes it by hand.
+      if (server.autoFinish) setTimeout(() => server.finishExtraction(analysisId), 0);
+
       return {
         uploadId: 'upload-1',
         analysisId,
         prompt,
         documents: files.map((f, i) => ({ id: `doc-${i}`, filename: f.name, size: f.size })),
-        agent: {
-          model: 'claude-opus-5',
-          summary: AGENT_TEXT,
-          fields: structuredClone(server.nextFields),
-          usage: { inputTokens: 24180, outputTokens: 742 },
-          fixture: false,
-        },
-        agentError: null,
       };
     });
+  },
+
+  /** Leaves the extraction running until the test finishes it. */
+  holdExtraction() {
+    server.autoFinish = false;
+  },
+
+  /** The extraction landing, and the server saying so. */
+  finishExtraction(analysisId: string, text = AGENT_TEXT) {
+    const analysis = server.analyses.get(analysisId);
+    if (!analysis) return;
+    analysis.messages.push({ id: crypto.randomUUID(), author: 'agent', text });
+    analysis.fields = structuredClone(server.nextFields);
+    analysis.extraction = { state: 'idle', error: null };
+    server.watchers.get(analysisId)?.();
+  },
+
+  /** Failing has to wake the browser the same way succeeding does. */
+  failExtraction(analysisId: string, error: string) {
+    const analysis = server.analyses.get(analysisId)!;
+    analysis.messages.push({
+      id: crypto.randomUUID(),
+      author: 'agent',
+      text: `Your documents are stored, but I could not read them. ${error}`,
+      variant: 'error',
+    });
+    analysis.extraction = { state: 'failed', error };
+    server.watchers.get(analysisId)?.();
+  },
+
+  /** The analysis in play, for tests that never held onto its id. */
+  soleAnalysisId() {
+    return [...server.analyses.keys()].at(-1)!;
   },
 
   /** What the next extraction finds. Defaults to FIELDS; reset between tests. */
@@ -1214,5 +1266,110 @@ describe('when the upload is refused', () => {
 
     expect(await screen.findByText(AGENT_TEXT)).toBeInTheDocument();
     expect(screen.getByLabelText('Additional context')).toHaveValue('');
+  });
+});
+
+/**
+ * The upload is answered before the agent has read anything, so the reply
+ * arrives on its own. These are about the gap in between — the part the analyst
+ * used to spend watching a button say "Sending…".
+ */
+describe('while the agent is reading', () => {
+  async function sendAndHold() {
+    const user = userEvent.setup();
+    server.holdExtraction();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    return user;
+  }
+
+  /** The message is a thing that has happened. It should not wait on the model. */
+  it('shows what was sent as soon as it is accepted', async () => {
+    await sendAndHold();
+
+    expect(await screen.findByText('acfr.pdf')).toBeInTheDocument();
+    // Not still pending: the send finished, the reading did not.
+    expect(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Sending…' })).not.toBeInTheDocument();
+  });
+
+  it('says the agent is working, where its reply will appear', async () => {
+    await sendAndHold();
+
+    expect(
+      await screen.findByText(/Reading your documents. This usually takes under a minute./),
+    ).toBeInTheDocument();
+  });
+
+  /** The server refuses a second upload; saying so beats letting them find out. */
+  it('will not take another upload until this one is done', async () => {
+    await sendAndHold();
+
+    await screen.findByText(/Reading your documents/);
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByText('The agent is still reading your last upload.')).toBeInTheDocument();
+  });
+
+  it('replaces the working state with the reply when it arrives', async () => {
+    await sendAndHold();
+    await screen.findByText(/Reading your documents/);
+
+    server.finishExtraction(server.soleAnalysisId());
+
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(screen.getByText(AGENT_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText(/Reading your documents/)).not.toBeInTheDocument();
+    // Still disabled, but for the ordinary reason — nothing is staged. What
+    // must be gone is the block that was about the agent being busy.
+    expect(
+      screen.queryByText('The agent is still reading your last upload.'),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * The failure arrives by the same route the result would have. Anything else
+   * leaves a spinner turning over work that stopped a minute ago.
+   */
+  it('stops working and says why when the extraction fails', async () => {
+    await sendAndHold();
+    await screen.findByText(/Reading your documents/);
+
+    server.failExtraction(server.soleAnalysisId(), 'Anthropic is rate limiting us.');
+
+    expect(await screen.findByText(/could not read them/)).toBeInTheDocument();
+    expect(screen.getByText(/rate limiting/)).toBeInTheDocument();
+    expect(screen.queryByText(/Reading your documents/)).not.toBeInTheDocument();
+    // Failed is a finished state — nothing should still be blocking a retry.
+    expect(
+      screen.queryByText('The agent is still reading your last upload.'),
+    ).not.toBeInTheDocument();
+  });
+
+  /** Nothing arrives if nothing is listening. */
+  it('watches the analysis it has open, and stops when it leaves', async () => {
+    const user = await sendAndHold();
+    const id = server.soleAnalysisId();
+    expect(server.watchers.has(id)).toBe(true);
+
+    server.finishExtraction(id);
+    await screen.findByRole('table');
+    await user.click(screen.getByRole('button', { name: '← Analyses' }));
+
+    await screen.findByRole('heading', { name: 'Analyses' });
+    expect(server.watchers.has(id)).toBe(false);
+  });
+
+  /** Resuming a draft mid-extraction has to look the same as never leaving. */
+  it('shows the working state on an analysis resumed while it is still reading', async () => {
+    const user = await sendAndHold();
+    const id = server.soleAnalysisId();
+
+    await user.click(screen.getByRole('button', { name: '← Analyses' }));
+    await user.click(await screen.findByRole('button', { name: new RegExp(FUND_LABEL) }));
+
+    expect(await screen.findByText(/Reading your documents/)).toBeInTheDocument();
+    server.finishExtraction(id);
+    expect(await screen.findByRole('table')).toBeInTheDocument();
   });
 });

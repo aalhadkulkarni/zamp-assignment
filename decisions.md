@@ -366,3 +366,37 @@ On the list itself: it now says it is fetching before it claims there is nothing
 The spinner is CSS rather than an animated image. It inherits the current colour, costs no request, and stops when the page stops - an animated GIF keeps spinning through a frozen tab, which is the one moment a spinner most needs to be telling the truth. It honours prefers-reduced-motion by pulsing instead.
 
 Refreshing the list after an action deliberately has no spinner. The analyst has already been given feedback for what they did, and flipping the list into a loading state behind them would be movement without information.
+
+
+26 - The upload is accepted, not completed. The result arrives over SSE.
+
+The upload handler used to persist the documents, call the model, write the results and only then answer. So the browser held a request open for the length of a model call - thirty to sixty seconds - with the send button reading "Sending…" and nothing else on screen. The analyst had no way to tell a slow extraction from a broken one.
+
+The split is the whole point, and it is independent of transport. POST /analyses/:id/documents now validates, stores the documents, records the analyst's own message, claims the analysis for an extraction, and returns 202. Everything slow happens after, on its own, and ends by announcing that the analysis changed.
+
+The acknowledgement comes after persisting rather than before it. Persisting is milliseconds, and it is the step that can legitimately refuse you - a file too large, a type we do not accept, more documents than the limit. Those are already clean 400s with a reason per file. Acking first would turn every one of them into an error arriving asynchronously, seconds later, on a message the analyst had already been told was accepted. Ten milliseconds buys keeping all the rejection paths as ordinary request failures.
+
+SSE rather than WebSockets. The traffic is entirely one way - the server tells the browser something changed, and the browser never sends anything back on the channel. EventSource brings reconnection with it, so a dropped connection re-establishes itself and the next change still lands. A socket would have added an upgrade handshake, a heartbeat scheme, and a reconnect loop of our own writing, to buy a direction we do not send in. The one real argument for WebSockets is a client that needs to talk mid-stream - cancel an extraction, or chat while waiting - and chat-initiated corrections are explicitly out of scope. If that changes, the transport changes; nothing else here would.
+
+Polling was the other option, and it is genuinely close. It needs no new transport and no notification plumbing at all. I did not take it because a poll interval is a choice between latency and load with no good answer - one second is a request per second per open tab for a minute, five seconds means a result that has been ready for four of them.
+
+The notification goes through Postgres LISTEN/NOTIFY rather than an in-process emitter. The browser's event stream and the extraction it is waiting on are separate requests, and nothing makes them land on the same process. An in-memory bus would drop the notification whenever they did not - and would reintroduce exactly the single-instance ceiling that was the argument for choosing Postgres over SQLite in decision 20. Having made that argument, building something that quietly depends on one instance would have been dishonest.
+
+The event carries no payload beyond an analysis id. The client re-reads the analysis it already knows how to fetch, so there is one description of an analysis rather than two that can drift apart, and adding a field to the server needs no change in the notification.
+
+Failure has to travel the same road as success. The browser is waiting on an event, not a response, so an extraction that fails without announcing itself leaves a spinner turning over work that stopped a minute ago. Nothing in the runner throws: every outcome, including one nobody predicted, is recorded on the analysis and announced. Extractions running when the process dies are marked failed at the next boot, because that is the only moment we can be certain nothing we started is still going.
+
+One extraction at a time per analysis, claimed with a conditional UPDATE rather than a read followed by a write, so two uploads arriving together cannot both proceed. The composer says so rather than letting the analyst discover it from a 409.
+
+Two things this cost. Extraction state is a new axis on the analysis - an analysis is a draft whether or not the agent happens to be reading for it, so folding this into status would have meant a crash could leave one permanently in a state it cannot leave. And the tests cannot exercise LISTEN/NOTIFY at all: pg-mem does not parse either statement, so the suite swaps in an in-process emitter the same way it swaps in a pool. Everything either side of the notification is tested; the notification itself is only ever proven against real Postgres, which I did by hand.
+
+
+27 - Writing to reply.raw discards every header Fastify staged.
+
+A bug worth recording because the tests could not have caught it and the browser gave no error.
+
+The SSE handler writes its headers with reply.raw.writeHead, which goes straight to the Node response and ignores whatever has been set on the Fastify reply - including the CORS headers @fastify/cors adds in a hook. The stream opened, sent its events, and the browser silently discarded all of them, because the response had no Access-Control-Allow-Origin.
+
+Nothing in the suite noticed: the tests read the stream with same-origin fetch from Node, which does not need CORS. Only a browser hitting a different port does, which is every real deployment - agent-web on Vercel, agent-api on Render.
+
+The fix is to spread the headers Fastify already staged into the writeHead call rather than replacing them. Found by opening the page.

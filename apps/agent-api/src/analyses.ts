@@ -35,6 +35,11 @@ export type StoredAnalysis = {
   fundId: string;
   fundName: string;
   status: 'draft' | 'approved';
+  /**
+   * Whether the agent is reading a document for this analysis right now. A
+   * separate axis from status: an analysis is a draft either way.
+   */
+  extraction: { state: 'idle' | 'running' | 'failed'; error: string | null };
   fiscalYearEnd: string;
   createdAt: string;
   messages: StoredMessage[];
@@ -81,7 +86,8 @@ export async function getAnalysis(
   const pool = getPool();
 
   const { rows } = await pool.query(
-    `SELECT id, fund_id, fund_name, status, fiscal_year_end, created_at
+    `SELECT id, fund_id, fund_name, status, fiscal_year_end, created_at,
+            extraction_state, extraction_error
        FROM analysis WHERE id = $1 AND tenant_id = $2`,
     [analysisId, tenantId],
   );
@@ -95,7 +101,7 @@ export async function getAnalysis(
     ),
     pool.query(
       `SELECT field_key, value, value_as_printed, units_multiplier,
-              confidence, source_page, source_text, reasoning
+              confidence, source_page, source_text, reasoning, lesson_note
          FROM extracted_field WHERE analysis_id = $1 ORDER BY field_key`,
       [analysisId],
     ),
@@ -126,6 +132,10 @@ export async function getAnalysis(
     fundId: row.fund_id,
     fundName: row.fund_name,
     status: row.status,
+    extraction: {
+      state: (row.extraction_state as StoredAnalysis['extraction']['state']) ?? 'idle',
+      error: (row.extraction_error as string | null) ?? null,
+    },
     fiscalYearEnd: row.fiscal_year_end ?? '',
     createdAt: iso(row.created_at),
     messages: messages.rows.map((m) => ({
@@ -187,6 +197,56 @@ export async function analysisFund(
   return rows.length > 0
     ? { fundId: rows[0].fund_id as string, fundName: rows[0].fund_name as string }
     : null;
+}
+
+/**
+ * Claims the analysis for an extraction, or refuses.
+ *
+ * Returns false when one is already running, which is what stops two uploads
+ * racing to write the same fields. The condition is in the WHERE clause rather
+ * than a read followed by a write, so two requests arriving together cannot
+ * both see 'idle'.
+ */
+export async function beginExtraction(analysisId: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    `UPDATE analysis
+        SET extraction_state = 'running', extraction_error = NULL,
+            extraction_started_at = now(), updated_at = now()
+      WHERE id = $1 AND extraction_state <> 'running'`,
+    [analysisId],
+  );
+  return rowCount === 1;
+}
+
+export async function finishExtraction(
+  analysisId: string,
+  error: string | null,
+): Promise<void> {
+  await getPool().query(
+    `UPDATE analysis
+        SET extraction_state = $2, extraction_error = $3, updated_at = now()
+      WHERE id = $1`,
+    [analysisId, error === null ? 'idle' : 'failed', error],
+  );
+}
+
+/**
+ * Marks extractions that were running when the process died.
+ *
+ * Nothing else would. The run that owned them is gone, so it can neither finish
+ * nor report, and the analysis would sit at 'running' forever with a browser
+ * waiting on a notification that is never coming. Called at boot, which is the
+ * moment we know for certain that nothing we started is still going.
+ */
+export async function failAbandonedExtractions(): Promise<number> {
+  const { rowCount } = await getPool().query(
+    `UPDATE analysis
+        SET extraction_state = 'failed',
+            extraction_error = 'The service restarted while reading your documents. Send them again.',
+            updated_at = now()
+      WHERE extraction_state = 'running'`,
+  );
+  return rowCount ?? 0;
 }
 
 export async function appendMessages(

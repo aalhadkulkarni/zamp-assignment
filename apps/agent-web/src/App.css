@@ -334,6 +334,15 @@
   line-height: 1.5;
 }
 
+/* Sits where the agent's reply will go, so the reply does not appear to arrive
+   from somewhere else. */
+.agent-working {
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  margin-top: 12px;
+}
+
 .row-rejected {
   background: var(--danger-bg);
 }

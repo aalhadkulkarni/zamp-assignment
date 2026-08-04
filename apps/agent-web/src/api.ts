@@ -59,6 +59,11 @@ export type StoredMessage = {
 /** The whole analysis as the server holds it. The browser renders this rather
  *  than accumulating its own copy, so a refresh costs nothing. */
 export type StoredAnalysis = AnalysisSummary & {
+  /**
+   * Whether the agent is reading a document right now. Separate from status: an
+   * analysis is a draft either way.
+   */
+  extraction: { state: 'idle' | 'running' | 'failed'; error: string | null };
   fiscalYearEnd: string;
   messages: StoredMessage[];
   fields: ReviewField[];
@@ -249,14 +254,17 @@ export type ModelReply = {
 
 export type ModelFailure = { code: string; message: string };
 
+/**
+ * What a 202 gives back: the documents are stored and the reading has started.
+ *
+ * Nothing about what was found, because nothing has been found yet. That answer
+ * arrives when the server says the analysis changed and we re-read it.
+ */
 export type UploadResult = {
   uploadId: string;
   analysisId: string;
   prompt: string;
   documents: UploadedDocument[];
-  /** Null when the model could not be reached — the documents are stored either way. */
-  agent: ModelReply | null;
-  agentError: ModelFailure | null;
 };
 
 /**
@@ -313,4 +321,26 @@ export async function uploadDocuments(
   }
 
   return response.json();
+}
+
+/**
+ * Calls back whenever the server says this analysis changed.
+ *
+ * The event carries no detail — only that something moved — so the caller
+ * re-reads the analysis. One description of an analysis that both sides agree
+ * on beats two that can drift apart, and it means adding a field to the server
+ * needs no change here.
+ *
+ * EventSource reconnects on its own, which is most of why this is SSE rather
+ * than a socket. If the connection drops mid-extraction the browser re-opens it
+ * and the next change still lands.
+ */
+export function watchAnalysis(analysisId: string, onChange: () => void): () => void {
+  const source = new EventSource(`${AGENT_API}/analyses/${analysisId}/events`);
+  source.addEventListener('changed', () => onChange());
+
+  // Deliberately no error handler that closes the stream: the default behaviour
+  // is to retry, and closing on the first blip is how a page ends up silently
+  // never updating again.
+  return () => source.close();
 }

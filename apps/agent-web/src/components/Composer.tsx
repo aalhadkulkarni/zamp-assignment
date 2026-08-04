@@ -6,9 +6,12 @@ type Props = {
   /** Resolves true when the upload succeeded. On false the composer keeps its
    *  contents so the analyst can fix the problem and try again. */
   onSend: (text: string, files: File[]) => Promise<boolean>;
+  /** Set while the agent is still reading the last upload. */
+  disabled?: boolean;
+  disabledReason?: string;
 };
 
-export default function Composer({ onSend }: Props) {
+export default function Composer({ onSend, disabled = false, disabledReason }: Props) {
   const [staged, setStaged] = useState<StagedFile[]>([]);
   const [text, setText] = useState('');
   const [isDragging, setIsDragging] = useState(false);
@@ -18,7 +21,7 @@ export default function Composer({ onSend }: Props) {
   const ready = staged.filter((s) => s.status === 'ready');
   // Documents are required to send. The chat asks for them, and until chat-driven
   // corrections exist there is nothing a text-only message could accomplish.
-  const canSend = ready.length > 0;
+  const canSend = ready.length > 0 && !disabled;
 
   function addFiles(incoming: FileList | null) {
     if (!incoming) return;
@@ -122,16 +125,25 @@ export default function Composer({ onSend }: Props) {
 
       <div className="composer-actions">
         {/* A disabled button with no stated reason is the thing people get stuck on. */}
-        {!canSend && text.trim() !== '' && (
+        {disabled ? (
           <p className="subtle" id="send-hint">
-            Attach a document to send.
+            {disabledReason}
           </p>
+        ) : (
+          !canSend &&
+          text.trim() !== '' && (
+            <p className="subtle" id="send-hint">
+              Attach a document to send.
+            </p>
+          )
         )}
         <button
           className="primary"
           onClick={send}
           disabled={!canSend || isSending}
-          aria-describedby={!canSend && text.trim() !== '' ? 'send-hint' : undefined}
+          aria-describedby={
+            disabled || (!canSend && text.trim() !== '') ? 'send-hint' : undefined
+          }
         >
           {isSending ? 'Sending…' : 'Send'}
         </button>
