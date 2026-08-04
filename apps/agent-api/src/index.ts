@@ -6,8 +6,16 @@ import { fileURLToPath } from 'node:url';
 // a directory containing a space resolves to a file that does not exist.
 const envFile = fileURLToPath(new URL('../.env', import.meta.url));
 
+// What the real environment already said, before the file gets a look in. A
+// variable set explicitly has to win over one sitting in a file: that is how
+// every dotenv library behaves, and without it there is no way to run this
+// process against anything other than whatever .env happens to contain — which
+// is what stopped the end-to-end tests using their own throwaway database.
+const explicit = { ...process.env };
+
 try {
   process.loadEnvFile(envFile);
+  Object.assign(process.env, explicit);
 } catch (error) {
   // A missing file is the normal case in production, where the platform sets
   // the environment directly. Anything else — unreadable, malformed — is a real

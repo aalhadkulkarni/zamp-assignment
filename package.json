@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "npm run test --workspaces --if-present",
+    "verify": "npm run typecheck && npm test && npm run e2e",
     "dev": "concurrently -n web,agent,customer -c cyan,green,magenta \"npm:dev:web\" \"npm:dev:agent\" \"npm:dev:customer\"",
     "dev:web": "npm run dev --workspace apps/agent-web",
     "dev:agent": "npm run dev --workspace apps/agent-api",
