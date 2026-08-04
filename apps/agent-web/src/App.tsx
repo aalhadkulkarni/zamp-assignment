@@ -7,8 +7,10 @@ import {
   getAnalysis,
   listAnalyses,
   listFieldDefinitions,
+  looksAsleep,
   submitEdits,
   uploadDocuments,
+  wakeBackends,
   watchAnalysis,
   writeReport,
   type AnalysisSummary,
@@ -17,6 +19,7 @@ import {
 } from './api';
 import AnalysisList from './components/AnalysisList';
 import Loading from './components/Loading';
+import WakingBackend from './components/WakingBackend';
 import NewAnalysis from './components/NewAnalysis';
 import Workspace from './components/Workspace';
 import type { EditEvent } from './types';
@@ -42,6 +45,13 @@ export default function App() {
    * nothing else.
    */
   const [labels, setLabels] = useState<Record<string, string>>({});
+  /**
+   * Set the moment any request comes back refused by the platform rather than
+   * answered by the application. Everything on the page depends on the same two
+   * services, so when they are asleep nothing works and there is no useful
+   * screen to leave the analyst on.
+   */
+  const [asleep, setAsleep] = useState(false);
   const [current, setCurrent] = useState<StoredAnalysis | null>(null);
   const [view, setView] = useState<View>({ name: 'list' });
   const [writing, setWriting] = useState(false);
@@ -64,6 +74,7 @@ export default function App() {
     try {
       setAnalyses(await listAnalyses());
     } catch (error) {
+      if (looksAsleep(error)) return setAsleep(true);
       setFailure(error instanceof Error ? error.message : 'Could not load analyses.');
     }
   }, []);
@@ -92,6 +103,7 @@ export default function App() {
       setFailure(null);
     } catch (error) {
       if (read !== reads.current) return;
+      if (looksAsleep(error)) return setAsleep(true);
       setFailure(error instanceof Error ? error.message : 'Could not load that analysis.');
     }
   }, []);
@@ -102,8 +114,12 @@ export default function App() {
       .then((definitions) => {
         if (live) setLabels(Object.fromEntries(definitions.map((d) => [d.key, d.label])));
       })
-      // Deliberately swallowed. Labels are presentation; the analysis is not.
-      .catch(() => {});
+      .catch((error) => {
+        // This one call reaches all the way through — agent-web to agent-api to
+        // customer-system — so it is the first to notice the hosting is asleep.
+        // Otherwise labels are presentation and a failure is not worth reporting.
+        if (live && looksAsleep(error)) setAsleep(true);
+      });
     return () => {
       live = false;
     };
@@ -115,12 +131,47 @@ export default function App() {
     let live = true;
     listAnalyses()
       .then((rows) => live && setAnalyses(rows))
-      .catch((error) => live && setFailure(error.message))
+      .catch((error) => {
+        if (!live) return;
+        if (looksAsleep(error)) setAsleep(true);
+        else setFailure(error.message);
+      })
       .finally(() => live && setListLoading(false));
     return () => {
       live = false;
     };
   }, []);
+
+  /**
+   * Waits for both services, then starts the page again from scratch.
+   *
+   * Everything the page holds was fetched while the backend was refusing
+   * requests, so none of it can be trusted — the fund labels are missing, the
+   * analysis list is empty because the call failed rather than because there is
+   * nothing, and any error on screen describes a problem that has since been
+   * fixed. Refetching is simpler than reasoning about which parts survived.
+   */
+  useEffect(() => {
+    if (!asleep) return;
+
+    const controller = new AbortController();
+    void wakeBackends(controller.signal).then(async () => {
+      if (controller.signal.aborted) return;
+      setAsleep(false);
+      setFailure(null);
+      setListLoading(true);
+      await Promise.all([
+        refreshList(),
+        listFieldDefinitions()
+          .then((definitions) => setLabels(Object.fromEntries(definitions.map((d) => [d.key, d.label]))))
+          .catch(() => {}),
+        view.name === 'analysis' ? load(view.id) : Promise.resolve(),
+      ]);
+      setListLoading(false);
+    });
+
+    return () => controller.abort();
+  }, [asleep, refreshList, load, view]);
 
   function originalValue(key: string): string {
     const field = current?.fields.find((f) => f.key === key);
@@ -282,6 +333,9 @@ export default function App() {
       setFailure(error instanceof Error ? error.message : 'Could not record that decision.');
     }
   }
+
+  // Before every other screen: there is nothing behind this that works.
+  if (asleep) return <WakingBackend />;
 
   if (view.name === 'new') {
     return <NewAnalysis onStart={startAnalysis} onCancel={() => setView({ name: 'list' })} />;

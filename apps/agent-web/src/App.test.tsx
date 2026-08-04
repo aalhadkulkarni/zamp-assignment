@@ -18,6 +18,7 @@ vi.mock('./api', async (importOriginal) => ({
   decideLesson: vi.fn(),
   watchAnalysis: vi.fn(),
   listFieldDefinitions: vi.fn(),
+  wakeBackends: vi.fn(),
 }));
 
 const mockListFunds = vi.mocked(api.listFunds);
@@ -89,6 +90,7 @@ const server = {
     });
 
     mockListFunds.mockResolvedValue(FUNDS);
+    vi.mocked(api.wakeBackends).mockResolvedValue(undefined);
     vi.mocked(api.listFieldDefinitions).mockResolvedValue([
       { key: 'total_investments', label: 'Total Investments', type: 'money', unit: 'USD', required: true, description: '' },
       { key: 'total_receivables', label: 'Total Receivables', type: 'money', unit: 'USD', required: true, description: '' },
@@ -1972,5 +1974,73 @@ describe('field names in the review table', () => {
     expect(table.queryByText('Total Investments')).not.toBeInTheDocument();
     // The values are still there, which is the point.
     expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073000');
+  });
+});
+
+/**
+ * Both backends sleep after fifteen minutes idle, and a request to a stopped
+ * instance is refused rather than queued. So the first visit after a quiet
+ * period fails outright — and without saying why, the app simply looks broken.
+ */
+describe('when the hosting is asleep', () => {
+  const refused = () => new ApiError('Bad gateway', 502);
+
+  it('says what is happening, and does not let it be dismissed', async () => {
+    vi.mocked(api.listAnalyses).mockRejectedValue(refused());
+    vi.mocked(api.listFieldDefinitions).mockRejectedValue(refused());
+    vi.mocked(api.wakeBackends).mockImplementation(() => new Promise(() => {}));
+
+    const user = userEvent.setup();
+    render(<App />);
+
+    const modal = await screen.findByRole('alertdialog');
+    expect(modal).toHaveTextContent(/free hosting tier/);
+    expect(modal).toHaveTextContent(/shuts the backend services down/);
+
+    // Nothing to dismiss it with, and nothing behind it that works.
+    expect(within(modal).queryByRole('button')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'New analysis' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+
+  /** Both, not one: they sleep independently and agent-api's check is shallow. */
+  it('waits for both services, not just the one it called', async () => {
+    vi.mocked(api.listFieldDefinitions).mockRejectedValueOnce(refused());
+    vi.mocked(api.wakeBackends).mockResolvedValue(undefined);
+
+    render(<App />);
+    await waitFor(() => expect(api.wakeBackends).toHaveBeenCalled());
+    expect(await screen.findByText('No analyses yet.')).toBeInTheDocument();
+  });
+
+  /**
+   * Everything on screen was fetched while requests were being refused, so none
+   * of it can be trusted — including the error describing a problem that has
+   * since been fixed.
+   */
+  it('refetches everything once they are up, and clears the stale error', async () => {
+    vi.mocked(api.listAnalyses).mockRejectedValueOnce(refused());
+    vi.mocked(api.listFieldDefinitions).mockRejectedValueOnce(refused());
+    vi.mocked(api.wakeBackends).mockResolvedValue(undefined);
+
+    render(<App />);
+    await screen.findByRole('alertdialog');
+
+    // wakeBackends resolves, so the page starts again from scratch.
+    expect(await screen.findByText('No analyses yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    // The labels call ran again too.
+    expect(api.listFieldDefinitions).toHaveBeenCalledTimes(2);
+  });
+
+  /** An ordinary failure is not this, and must not be hidden behind it. */
+  it('does not claim the hosting is asleep when the server answered', async () => {
+    vi.mocked(api.listAnalyses).mockRejectedValue(new ApiError('Something broke', 500));
+
+    render(<App />);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Something broke');
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
   });
 });

@@ -1,4 +1,6 @@
 const AGENT_API = import.meta.env.VITE_AGENT_API_URL ?? 'http://localhost:3001';
+const CUSTOMER_SYSTEM =
+  import.meta.env.VITE_CUSTOMER_SYSTEM_URL ?? 'http://localhost:3002';
 
 export type Fund = {
   id: string;
@@ -381,4 +383,46 @@ export function watchAnalysis(analysisId: string, onChange: () => void): () => v
   // is to retry, and closing on the first blip is how a page ends up silently
   // never updating again.
   return () => source.close();
+}
+
+/**
+ * Whether a failure is the hosting rather than the request.
+ *
+ * Both backends run on a free tier that stops an instance after fifteen minutes
+ * idle. A request arriving at a stopped instance is refused by the platform,
+ * not queued, so it comes back 502 or 503 — and a request that never left at
+ * all is a 0 from our own fetch wrapper. None of those say anything about what
+ * was asked for.
+ */
+export function looksAsleep(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 0 || error.status === 502 || error.status === 503);
+}
+
+/**
+ * Waits for both services to answer their own health check.
+ *
+ * Both, not one: they sleep independently, and agent-api's health check is
+ * deliberately shallow — it reports whether agent-api is running and says
+ * nothing about anything it depends on. Waking only that one leaves every call
+ * that reaches through to customer-system still failing.
+ *
+ * The health endpoint is also what does the waking. Ordinary requests to a
+ * stopped instance keep being refused; it is the request itself that starts it,
+ * and health is the cheapest one to spend on that.
+ */
+export async function wakeBackends(signal?: AbortSignal): Promise<void> {
+  const awaken = async (base: string) => {
+    for (;;) {
+      if (signal?.aborted) return;
+      try {
+        const response = await fetch(`${base}/health`, { signal });
+        if (response.ok) return;
+      } catch {
+        // Refused, timed out, or aborted. Aborted is handled by the check above.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  };
+
+  await Promise.all([awaken(AGENT_API), awaken(CUSTOMER_SYSTEM)]);
 }

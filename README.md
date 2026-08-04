@@ -28,19 +28,21 @@ tier, which stops an instance after fifteen minutes of inactivity and starts it
 again on the next request. That is the hosting, not the application — once warm
 it answers in well under a second.
 
-If you would rather not wait inside the app, wake them both first — they sleep
-independently, and each health check only speaks for its own service:
+**You do not need to do anything about it.** A request to a stopped instance is
+refused rather than queued, so the app notices, says what is happening, and
+waits — it calls both health endpoints, which is what actually starts the
+services, and reloads itself once they answer. Nothing to click.
+
+If you would rather warm them yourself first, these are the same two calls:
 
 - https://zamp-agent-api.onrender.com/health
 - https://zamp-customer-system.onrender.com/health
 
-Both should return `{"ok":true}`. The page will be responsive by the time you
-get to it.
-
-(These checks are deliberately shallow. A service's health endpoint should
-report whether *it* is running, not whether everything it depends on is —
-otherwise a sleeping dependency makes a healthy service look broken, and the
-platform restarts something that was working.)
+Both, not one: they sleep independently, and each health check speaks only for
+its own service. That is deliberate — a health endpoint should report whether
+*it* is running, not whether everything it depends on is, or a sleeping
+dependency makes a healthy service look broken and the platform restarts
+something that was working.
 
 Extraction itself takes thirty to sixty seconds, and that one *is* the
 application — it is a model reading your documents. The upload returns

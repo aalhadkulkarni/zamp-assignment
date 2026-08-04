@@ -42,6 +42,43 @@
 
 /* Centred in the space the screen it replaces would have filled, so the page
    does not jump when the real content arrives. */
+/* Over everything. Nothing behind it works while the hosting is asleep. */
+.waking-backdrop {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 100;
+}
+
+.waking-modal {
+  max-width: 420px;
+  padding: 28px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: center;
+}
+
+.waking-modal h2 {
+  margin: 14px 0 10px;
+  font-size: 17px;
+}
+
+.waking-modal p {
+  margin: 0 0 10px;
+  line-height: 1.55;
+  font-size: 14px;
+}
+
+.waking-modal .spinner {
+  display: inline-block;
+  color: var(--accent);
+}
+
 .loading-page {
   display: flex;
   align-items: center;
