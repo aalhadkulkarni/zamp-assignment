@@ -22,14 +22,29 @@ const { migrate } = await import('./db.js');
 const { startListening } = await import('./events.js');
 const { failAbandonedWork } = await import('./analyses.js');
 
-// Unlike a missing API key, there is no degraded mode here: an analysis is the
-// product, and without somewhere to keep one there is nothing to serve. Failing
-// at boot with the variable named beats failing on the first request.
-if (!process.env.DATABASE_URL) {
+const production = process.env.NODE_ENV === 'production';
+
+if (process.env.DATABASE_URL) {
+  await migrate();
+} else if (production) {
+  // No degraded mode in production: an analysis is the product, and without
+  // somewhere to keep one there is nothing to serve. Failing at boot with the
+  // variable named beats failing on the first request.
   console.error('DATABASE_URL is not set. agent-api cannot start without a database.');
   process.exit(1);
+} else {
+  // Locally, a missing database means someone has just cloned this and wants to
+  // see it work. Making them provision Postgres before they can look at
+  // anything is a bad first ten minutes, so it runs in memory instead — the
+  // real schema, the real SQL, and nothing kept.
+  console.warn(
+    'DATABASE_URL is not set — running against an in-memory database.\n' +
+      '  Everything works, and nothing survives a restart.\n' +
+      '  Set DATABASE_URL in apps/agent-api/.env to keep your analyses.',
+  );
+  const { startTestDatabase } = await import('./testing.js');
+  await startTestDatabase();
 }
-await migrate();
 
 // Anything left mid-flight belonged to a process that no longer exists, so
 // nothing will ever finish or report it. This is the only moment we can be
@@ -44,6 +59,15 @@ if (abandoned > 0) {
 // announces it through the database, so the browser waiting on an event stream
 // hears about it even when the work ran on a different instance.
 await startListening();
+
+// Same reasoning as the database. A fresh clone has no API key, and a demo that
+// cannot demonstrate anything is worse than one that says it is using a
+// recording. Never in production: a deployed service that quietly served
+// fixtures because it lost its key is precisely the failure this guards against.
+if (!production && !process.env.ANTHROPIC_API_KEY && process.env.USE_FIXTURES === undefined) {
+  process.env.USE_FIXTURES = 'true';
+  console.warn('No ANTHROPIC_API_KEY — using recorded replies. Set one to make real calls.');
+}
 
 if (process.env.USE_FIXTURES === 'true') {
   // Loud on purpose. A recorded reply is indistinguishable from a real one in
