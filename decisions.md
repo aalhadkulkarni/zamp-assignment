@@ -488,3 +488,18 @@ Two things worth keeping from that.
 I diagnosed from a plausible theory rather than from a measurement. The evidence I gathered - extraction completed, notification published, LISTEN connections alive in pg_stat_activity - was all consistent with the reconnect theory and also consistent with the true cause, and I did not look for the test that would separate them. That test took two minutes: open a stream, publish a notification by hand, see whether it arrives. It did not.
 
 And a bug that will not reproduce on a clean environment is worth checking is not the environment. "Consistently reproducible" was what made me look harder, which is the right instinct - but only after I had already shipped a fix for it.
+
+
+34 - A read that answers late must not overwrite one that answered on time.
+
+Four things fetch the analysis, and two of them routinely overlap: confirm reads it back after submitting corrections, and the event stream reads it again the moment the diagnosis finishes. Both end in the same setState, so the winner is whichever *resolves* last rather than whichever was asked last.
+
+When the diagnosis is quick - which it is on recorded replies, and is on a fast model call - the second read answers first with the finished state, and then the first read lands holding a snapshot taken before the diagnosis finished. The analysis reverts to "still working it out", and no further event is coming to correct it, because the thing that would have sent one has already happened. The spinner turns forever over work that finished a second ago.
+
+The fix is a counter. Each read takes a number, and a response whose number is no longer the latest is discarded rather than applied. Five lines, and it holds however many callers overlap and however slow any of them is.
+
+Debounce was the obvious alternative and does not work. It controls when a request starts; this is about when a response arrives. A window short enough not to delay the UI does not collapse two reads a second apart, and a window long enough to collapse them delays every update by that long - and still fails whenever the gap exceeds it, which is exactly when the network is slow, which is when this happens.
+
+AbortController is the other standard answer and is arguably better, since it stops the stale request rather than ignoring its answer. It buys no additional correctness here and needs abort plumbing through the API layer, so it is not worth it at this size.
+
+Worth noting how this was found. It was not found by reading the code - it was reported as an infinite spinner, misdiagnosed twice, and only located after building a wire-level probe that opened an event stream and drove the whole flow against a clean server. Two of the three infinite-spinner reports in this project turned out to be stale dev servers of mine holding the ports, and the third was this. The lesson I would take is that "the browser is stuck" is a symptom with several unrelated causes, and the first move is to establish which one, not to fix the most plausible.

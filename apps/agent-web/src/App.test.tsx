@@ -1859,3 +1859,74 @@ describe('when the event stream drops and comes back', () => {
     expect(screen.queryByText(/Reading your documents/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * Two reads of the same analysis, overlapping, answering out of order.
+ *
+ * `confirm` reads the analysis back after submitting corrections, and the event
+ * stream reads it again the moment the diagnosis finishes. Both end in the same
+ * setState, so whichever *resolves* last wins — and when the diagnosis is quick
+ * the later request answers first, leaving the earlier one to land afterwards
+ * with a snapshot that still says "working it out". No further event is coming,
+ * so the spinner turns forever over work that finished.
+ */
+describe('a slow read answering after a newer one', () => {
+  it('does not let a stale response overwrite a newer one', async () => {
+    const user = userEvent.setup();
+    server.diagnoses({
+      summary: 'Here is what went wrong.',
+      lessons: [],
+    });
+
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    const id = server.soleAnalysisId();
+    server.holdExtraction(); // also holds the diagnosis
+
+    // The read that confirm() makes after submitting is held mid-flight. It will
+    // answer with the analysis as it is at that moment: diagnosis still running.
+    let releaseStale!: () => void;
+    const held = new Promise<void>((resolve) => {
+      releaseStale = resolve;
+    });
+    let holdNext = false;
+    const realGet = vi.mocked(api.getAnalysis).getMockImplementation()!;
+    vi.mocked(api.getAnalysis).mockImplementation(async (analysisId) => {
+      if (!holdNext) return realGet(analysisId);
+      holdNext = false;
+      const snapshot = await realGet(analysisId); // taken now, delivered later
+      await held;
+      return snapshot;
+    });
+
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+
+    holdNext = true;
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+
+    // Nothing on screen has moved yet: confirm's read is the one being held, and
+    // it is the only thing that would have shown the diagnosis as running.
+
+    // The diagnosis finishes and the event stream reads it again — that read is
+    // not held, so it answers first, with the finished state.
+    server.finishDiagnosis(id);
+    expect(await screen.findByText('Here is what went wrong.')).toBeInTheDocument();
+
+    // Only now does the earlier read answer, carrying the older snapshot.
+    releaseStale();
+    await waitFor(() => expect(api.getAnalysis).toHaveBeenCalled());
+
+    // The finished state has to survive it. Before the fix it did not, and no
+    // further event was coming to put it right.
+    expect(screen.getByText('Here is what went wrong.')).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Working out what caused those corrections/),
+    ).not.toBeInTheDocument();
+  });
+});

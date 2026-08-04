@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ApiError,
   WriteRejected,
@@ -61,11 +61,30 @@ export default function App() {
     }
   }, []);
 
+  /**
+   * Counts reads so a slow one cannot overwrite a newer answer.
+   *
+   * Four things call `load`, and two of them routinely overlap: `confirm` reads
+   * the analysis back after submitting corrections, and the event stream reads
+   * it again the moment the diagnosis finishes. Both end in `setCurrent`, so
+   * whichever *resolves* last wins — not whichever was asked last. When the
+   * diagnosis is quick the second read returns first, the first read lands after
+   * it holding the older snapshot, and the analysis reverts to "still working
+   * it out" with no further event coming to correct it. The spinner then turns
+   * forever over work that finished.
+   */
+  const reads = useRef(0);
+
   const load = useCallback(async (analysisId: string) => {
+    const read = (reads.current += 1);
     try {
-      setCurrent(await getAnalysis(analysisId));
+      const analysis = await getAnalysis(analysisId);
+      // A newer read has already answered, so this one is history.
+      if (read !== reads.current) return;
+      setCurrent(analysis);
       setFailure(null);
     } catch (error) {
+      if (read !== reads.current) return;
       setFailure(error instanceof Error ? error.message : 'Could not load that analysis.');
     }
   }, []);
