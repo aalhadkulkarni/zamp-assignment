@@ -182,8 +182,28 @@ The key lives only in `agent-api` and is never sent to the browser. Nothing
 prefixed `VITE_` may ever hold a secret — Vite compiles those into the served
 bundle.
 
-`.env` is gitignored. `apps/agent-web/.env.local` overrides the API URLs if you
-run the services somewhere other than the default ports.
+`.env` is gitignored.
+
+### Where the browser looks for the backends
+
+Both default to localhost and both matter when this is deployed:
+
+| | |
+|---|---|
+| `VITE_AGENT_API_URL` | `http://localhost:3001` |
+| `VITE_CUSTOMER_SYSTEM_URL` | `http://localhost:3002` |
+
+Set them in `apps/agent-web/.env.local` locally, and on the host when deploying.
+Vite bakes these in **at build time**, so changing one on the host does nothing
+until the next build.
+
+The second is easy to overlook, because almost nothing in the browser talks to
+`customer-system` — everything goes through `agent-api`. The exception is the
+health check the page calls to wake a sleeping free instance, and it has to call
+both because the two sleep independently. Left unset on a deployed frontend, the
+page tries `localhost:3002`, which on a visitor's machine is nothing: the
+"starting the backend" message appears and never clears. Worse than not having
+it, so it is worth checking after any change to hosting.
 
 ### Tests
 
