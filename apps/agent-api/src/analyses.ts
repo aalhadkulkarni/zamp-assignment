@@ -85,7 +85,7 @@ export async function getAnalysis(
   );
   if (rows.length === 0) return null;
 
-  const [messages, fields, lessons] = await Promise.all([
+  const [messages, fields, lessons, correctionRows] = await Promise.all([
     pool.query(
       `SELECT id, author, body, variant, fixture, attachments
          FROM message WHERE analysis_id = $1 ORDER BY seq`,
@@ -102,7 +102,20 @@ export async function getAnalysis(
          FROM lesson WHERE analysis_id = $1 ORDER BY created_at`,
       [analysisId],
     ),
+    // The analyst's submitted corrections, newest per field. Without these the
+    // table shows what the model proposed rather than what was agreed and
+    // written — which reads as "not found" for a value the customer now holds.
+    pool.query(
+      `SELECT DISTINCT ON (field_key) field_key, to_value
+         FROM correction WHERE analysis_id = $1
+        ORDER BY field_key, created_at DESC`,
+      [analysisId],
+    ),
   ]);
+
+  const corrected = new Map<string, string>(
+    correctionRows.rows.map((c) => [c.field_key, c.to_value]),
+  );
 
   const row = rows[0];
   return {
@@ -123,16 +136,27 @@ export async function getAnalysis(
     // Postgres returns numeric as a string so it cannot silently lose precision
     // on the way out. These are whole dollars in the billions, so the conversion
     // has to be deliberate rather than left to the driver.
-    fields: fields.rows.map((f) => ({
-      key: f.field_key,
-      value: numeric(f.value),
-      valueAsPrinted: numeric(f.value_as_printed),
-      unitsMultiplier: Number(f.units_multiplier),
-      confidence: f.confidence,
-      sourcePage: f.source_page,
-      sourceText: f.source_text,
-      reasoning: f.reasoning,
-    })),
+    fields: fields.rows.map((f) => {
+      const correction = corrected.get(f.field_key);
+      return {
+        key: f.field_key,
+        // What the analyst settled on, falling back to what the model read. The
+        // provenance below still describes the model's reading, which is the
+        // point: it is how you check the value against the page.
+        value:
+          correction === undefined
+            ? numeric(f.value)
+            : correction === ''
+              ? null
+              : Number(correction),
+        valueAsPrinted: numeric(f.value_as_printed),
+        unitsMultiplier: Number(f.units_multiplier),
+        confidence: f.confidence,
+        sourcePage: f.source_page,
+        sourceText: f.source_text,
+        reasoning: f.reasoning,
+      };
+    }),
     lessons: lessons.rows.map(toLesson),
   };
 }

@@ -798,6 +798,39 @@ describe('POST /analyses/:analysisId/edits', () => {
     expect(status).toBe(400);
   });
 
+  /**
+   * The table has to show what was agreed, not what was proposed. Left as the
+   * model's reading it says "not found" for a value the customer now holds.
+   */
+  it('shows the corrected value once corrections are submitted', async () => {
+    // The extraction first, then the diagnosis — this describe defaults to the
+    // latter, so the upload needs the former put back.
+    create.mockResolvedValueOnce({
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+      usage: { input_tokens: 100, output_tokens: 10 },
+    });
+    await upload([pdf('acfr.pdf')]);
+
+    const before = await app.inject({ method: 'GET', url: `/analyses/${ANALYSIS}` });
+    expect(
+      before.json().fields.find((f: { key: string }) => f.key === 'net_position').value,
+    ).toBeNull();
+
+    await submit({
+      fundId: 'calpers',
+      edits: [{ ...EDIT, fieldKey: 'net_position', from: '', to: '409424367000' }],
+    });
+
+    const after = await app.inject({ method: 'GET', url: `/analyses/${ANALYSIS}` });
+    const field = after.json().fields.find((f: { key: string }) => f.key === 'net_position');
+    expect(field.value).toBe(409424367000);
+    // The provenance still describes the model's reading — that is how you check
+    // the value against the page.
+    expect(field.reasoning).toBe('Not present on the supplied pages.');
+  });
+
   it('refuses a batch that does not say which fund it belongs to', async () => {
     const { status, body } = await submit({ edits: [EDIT] });
     expect(status).toBe(400);
