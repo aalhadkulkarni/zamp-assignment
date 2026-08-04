@@ -881,12 +881,44 @@ describe('POST /analyses/:analysisId/edits', () => {
       expect(rows).toHaveLength(1);
     });
 
-    it('answers from the recording in fixture mode', async () => {
+    /**
+     * The recording reads the corrections it was given rather than returning a
+     * fixed answer. It used to propose the same three lessons whatever had been
+     * changed, which meant the cards named fields nobody had touched.
+     */
+    it('answers from the recording, about the corrections actually made', async () => {
       process.env.USE_FIXTURES = 'true';
       const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      expect(analysis.lessons.length).toBeGreaterThan(1);
       expect(create).not.toHaveBeenCalled();
+      expect(analysis.lessons).toHaveLength(1);
+      // EDIT moves 462090073000 to 462090073 — a clean factor of a thousand.
+      expect(analysis.lessons[0]).toMatchObject({
+        type: 'units',
+        fieldKeys: ['total_investments'],
+        unitsMultiplier: 1000,
+      });
+    });
+
+    /** Corrections that share a cause are one lesson, not several. */
+    it('groups corrections the recording can see one cause for', async () => {
+      process.env.USE_FIXTURES = 'true';
+      const { analysis } = await submit({
+        fundId: 'calpers',
+        edits: [EDIT, { ...EDIT, id: 'e2', fieldKey: 'net_position', from: '5000', to: '5' }],
+      });
+
+      expect(analysis.lessons).toHaveLength(1);
+      expect(analysis.lessons[0].fieldKeys).toEqual(['total_investments', 'net_position']);
+    });
+
+    /** Never a lesson about a field the analyst did not touch. */
+    it('never names a field that was not corrected', async () => {
+      process.env.USE_FIXTURES = 'true';
+      const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
+
+      const named = analysis.lessons.flatMap((l: { fieldKeys: string[] }) => l.fieldKeys);
+      expect(new Set(named)).toEqual(new Set(['total_investments']));
     });
   });
 

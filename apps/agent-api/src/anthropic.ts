@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import Anthropic from '@anthropic-ai/sdk';
-import type { Diagnosis } from './diagnosis.js';
+import type { Diagnosis, Lesson } from './diagnosis.js';
 import type { Extraction } from './extraction.js';
 
 /**
@@ -382,67 +382,122 @@ export async function diagnose(
  * everything shares a cause would hide the case the UI most has to handle —
  * several proposals, each needing its own decision.
  */
+/**
+ * A recorded diagnosis that reads the corrections it was given.
+ *
+ * It used to return the same three lessons whatever the analyst had changed,
+ * which meant the cards routinely named fields nobody had touched — the thing
+ * the whole feature exists to get right, demonstrated wrongly. It now parses the
+ * corrections out of the prompt and proposes one lesson per cause it can see,
+ * the same way extractFixture reads the schema it is handed.
+ *
+ * The classification is deliberately crude, because it is a stand-in for a model
+ * and not a second implementation of one. What it has to be is *consistent with
+ * the input*: the right number of cards, naming the right fields, of a type that
+ * plausibly explains the change in front of it.
+ */
 export async function diagnoseFixture(
-  _prompt: string,
+  prompt: string,
   _attachments: Attachment[],
   _schema: Record<string, unknown>,
 ): Promise<DiagnosisReply> {
   await sleep(fixtureDelayMs());
 
+  const corrections = parseCorrections(prompt);
+  const lessons: Lesson[] = [];
+
+  // A figure out by exactly a factor of a thousand is a units heading misread,
+  // and every field it happened to shares one cause.
+  const scaled = corrections.filter((c) => scaleBetween(c.from, c.to) !== null);
+  if (scaled.length > 0) {
+    const multiplier = scaleBetween(scaled[0].from, scaled[0].to)!;
+    lessons.push({
+      id: 'lesson-units',
+      type: 'units',
+      scope: 'fund',
+      fieldKeys: scaled.map((c) => c.fieldKey),
+      explanation:
+        `Every figure you changed here is the one I read, moved by a factor of ` +
+        `${multiplier.toLocaleString('en-US')}. I applied the units heading; the values you kept ` +
+        `suggest this statement does not follow it.`,
+      rule: `For this fund, treat the figures in this statement as being in ${multiplier.toLocaleString('en-US')}s.`,
+      unitsMultiplier: multiplier,
+      documentLabel: '',
+      confidence: 'high',
+    });
+  }
+
+  // A value I left blank and you filled in is a label I did not recognise.
+  for (const filled of corrections.filter((c) => c.from === 'nothing' && c.to !== 'nothing')) {
+    lessons.push({
+      id: `lesson-label-${filled.fieldKey}`,
+      type: 'synonym',
+      scope: 'fund',
+      fieldKeys: [filled.fieldKey],
+      explanation:
+        'I left this blank because I was looking for a line naming it the way the field does. ' +
+        'The figure you entered is printed under a label I did not recognise as the same thing.',
+      rule: `Treat "Receivables, Net" as ${filled.fieldKey} for this fund.`,
+      unitsMultiplier: null,
+      documentLabel: 'Receivables, Net',
+      confidence: 'medium',
+    });
+  }
+
+  // Anything left: a real change I cannot attribute to scale or to a label.
+  const explained = new Set(lessons.flatMap((l) => l.fieldKeys));
+  const rest = corrections.filter((c) => !explained.has(c.fieldKey));
+  if (rest.length > 0) {
+    lessons.push({
+      id: 'lesson-column',
+      type: 'wrong_source',
+      scope: 'fund',
+      fieldKeys: rest.map((c) => c.fieldKey),
+      explanation:
+        'The figures you kept are the ones printed in the Total column of the same rows I read. ' +
+        'I chose PERF A because it was the largest plan, but you want the fund as a whole.',
+      rule:
+        'For this fund, read the Total column of the statement of fiduciary net position ' +
+        'rather than an individual plan column.',
+      unitsMultiplier: null,
+      documentLabel: '',
+      confidence: 'high',
+    });
+  }
+
+  const summary =
+    lessons.length === 0
+      ? 'You changed nothing I can see a cause for, so there is nothing here worth remembering.'
+      : `I think ${lessons.length === 1 ? 'one thing' : `${lessons.length} separate things`} went wrong across ` +
+        `${corrections.length} correction${corrections.length === 1 ? '' : 's'}. ` +
+        'Each proposal below says how far I think it should reach.';
+
   return {
     model: 'claude-opus-5',
     fixture: true,
     usage: { inputTokens: 1_840, outputTokens: 410 },
-    diagnosis: {
-      summary:
-        'Three separate things went wrong, and only two of them are worth remembering. ' +
-        'I read the wrong column throughout, I did not recognise the label this ' +
-        'statement uses for receivables, and one figure I simply mistyped.',
-      lessons: [
-        {
-          id: 'lesson-column',
-          type: 'wrong_source',
-          scope: 'fund',
-          fieldKeys: ['total_investments', 'total_assets', 'total_liabilities', 'net_position'],
-          explanation:
-            'Every figure you changed is the one printed in the Total column of the same ' +
-            'rows I read. I chose PERF A because it was the largest plan, but you want ' +
-            'the fund as a whole.',
-          rule:
-            'For this fund, read the Total column of the statement of fiduciary net ' +
-            'position rather than an individual plan column.',
-          unitsMultiplier: null,
-          documentLabel: '',
-          confidence: 'high',
-        },
-        {
-          id: 'lesson-receivables',
-          type: 'synonym',
-          scope: 'fund',
-          fieldKeys: ['total_receivables'],
-          explanation:
-            'I left this blank because I was looking for a line saying total receivables. ' +
-            'The figure you entered is printed on the line labelled "Receivables, Net", ' +
-            'which I did not recognise as the same thing.',
-          rule: 'Treat "Receivables, Net" as the total receivables line for this fund.',
-          unitsMultiplier: null,
-          documentLabel: 'Receivables, Net',
-          confidence: 'high',
-        },
-        {
-          id: 'lesson-slip',
-          type: 'typo',
-          scope: 'none',
-          fieldKeys: [],
-          explanation:
-            'The last digit you changed does not correspond to anything else on the page. ' +
-            'I think I simply transcribed it wrongly, which is not a pattern.',
-          rule: '',
-          unitsMultiplier: null,
-          documentLabel: '',
-          confidence: 'medium',
-        },
-      ],
-    },
+    diagnosis: { summary, lessons },
   };
+}
+
+/** Reads back the corrections diagnosisPrompt wrote into its own text. */
+function parseCorrections(prompt: string): { fieldKey: string; from: string; to: string }[] {
+  const found: { fieldKey: string; from: string; to: string }[] = [];
+  const pattern =
+    /^- (\w+) \(.*?\)\n\s+you extracted: (.*)\n\s+analyst set it to: (.*)$/gm;
+
+  for (const match of prompt.matchAll(pattern)) {
+    found.push({ fieldKey: match[1], from: match[2].trim(), to: match[3].trim() });
+  }
+  return found;
+}
+
+/** The factor between two values, when it is a clean power of ten. */
+function scaleBetween(from: string, to: string): number | null {
+  const a = Number(from);
+  const b = Number(to);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === 0 || b === 0) return null;
+
+  const ratio = a > b ? a / b : b / a;
+  return [1000, 1_000_000].includes(ratio) ? ratio : null;
 }
