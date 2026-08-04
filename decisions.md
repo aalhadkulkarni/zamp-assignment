@@ -430,3 +430,29 @@ One message for the batch, not one per field, for the same reason the batch is d
 The same evidence is on the lesson card itself, not only in the conversation. The card listed the fields a lesson was about but not what had happened to them, which asked the analyst to agree to a standing rule while going somewhere else to check what it was about. The corrections are attached to the lesson on the server rather than correlated in the browser, matched on the batch as well as the field - the same field can be corrected twice, and a lesson belongs to exactly one of those batches.
 
 The formatter is shared between the table, the conversation and the card. The same figure rendered three ways in three places is how a UI starts looking untrustworthy.
+
+
+30 - One lesson per correction, even when the cause is shared.
+
+The diagnosis originally proposed one lesson per cause, with a list of the fields it covered. Four values all moved by a factor of a thousand became one card naming four fields, which looked like the right economy.
+
+It is not, because a card is a single ratification. Accepting it applies the rule to all four fields at once, so an analyst who agrees about three and not the fourth has no way to say so - they can only reject the whole proposal and lose the part that was right. The economy was ours, and the cost was theirs.
+
+So the corrections still go up in one call, because that is what lets a shared cause be seen at all. Asked one at a time the model can only find coincidences. But the proposal comes back one per corrected field, and a shared cause is reported rather than acted on: each card names the other fields it thinks moved for the same reason, and says they are decided separately.
+
+Enforced in the schema rather than asked for in the prompt. The lessons object has one named property per corrected field, all required, additionalProperties false - so exactly one verdict per correction is a property of the contract. It also closes a gap that was there before: a correction could previously come back with no lesson at all, silently unexplained. Now a slip has to be said out loud, as type typo with scope none.
+
+The cost is more cards and more clicks when a cause really is shared. That is the trade being made, and it is the right way round: the analyst spends a click to keep the ability to disagree about one field.
+
+I also got the ordering of this wrong. The grouping arrived as part of rewriting the recorded diagnosis to read its inputs, which was not what I had been asked to do, and I noted it in a commit message instead of raising it. The design change above came from being told so.
+
+
+31 - A column that leaves the schema has to be dropped, not just stopped being written.
+
+Renaming field_keys to field_key passed every test and broke immediately against the real database.
+
+The migration is CREATE TABLE IF NOT EXISTS plus ALTER TABLE ADD COLUMN IF NOT EXISTS, which is enough for adding things and nothing else. A database created before the change still had field_keys, still NOT NULL, and no longer written to - so every insert failed.
+
+The tests could not see it. pg-mem builds every table from the current schema, so it never has the old shape to be wrong about. Only a database with history does, which is exactly what the deployed one is.
+
+Dropping the column explicitly fixes it. The wider point is that this migration strategy has a ceiling: it expresses additions and nothing else, and anything that removes or renames has to be written by hand and verified somewhere the old shape actually exists. That is fine at this size, and would not be for long.

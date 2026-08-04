@@ -96,11 +96,16 @@ export default function LessonCard({ lesson, onAccept, onReject }: Props) {
           ))}
         </ul>
       ) : (
-        // A lesson can name no corrections at all — a slip the agent decided was
-        // not worth a rule names nothing on purpose.
-        lesson.fieldKeys.length > 0 && (
-          <p className="lesson-fields subtle">{lesson.fieldKeys.join(', ')}</p>
-        )
+        lesson.fieldKey && <p className="lesson-fields subtle">{lesson.fieldKey}</p>
+      )}
+
+      {/* Said, not acted on. The agent thinks these moved for the same reason,
+          and that is worth knowing — but each is decided on its own card, so
+          agreeing here does not commit the analyst to agreeing there. */}
+      {lesson.sharedWith.length > 0 && (
+        <p className="lesson-shared subtle">
+          Looks like the same cause as {lesson.sharedWith.join(', ')} — decided separately.
+        </p>
       )}
 
       {rejecting ? (

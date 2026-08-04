@@ -752,18 +752,18 @@ describe('POST /analyses/:analysisId/edits', () => {
         type: 'text',
         text: JSON.stringify({
           summary: 'You scaled a figure that was already in whole dollars.',
-          lessons: [
-            {
+          lessons: {
+            total_investments: {
               type: 'units',
               scope: 'fund',
-              fieldKeys: ['total_investments'],
+              sharedWith: [],
               explanation: 'The heading said thousands but this section did not follow it.',
               rule: 'Check whether the investments section restates its units.',
               unitsMultiplier: 1,
               documentLabel: '',
               confidence: 'medium',
             },
-          ],
+          },
         }),
       },
     ],
@@ -790,7 +790,11 @@ describe('POST /analyses/:analysisId/edits', () => {
       expect(analysis.diagnosis).toEqual({ state: 'idle', error: null });
       expect(lastAgentMessage(analysis)?.text).toMatch(/already in whole dollars/);
       expect(analysis.lessons).toHaveLength(1);
-      expect(analysis.lessons[0]).toMatchObject({ type: 'units', scope: 'fund' });
+      expect(analysis.lessons[0]).toMatchObject({
+        type: 'units',
+        scope: 'fund',
+        fieldKey: 'total_investments',
+      });
     });
 
     /** An accept has to name exactly one lesson, and a model inventing ids is a
@@ -855,9 +859,12 @@ describe('POST /analyses/:analysisId/edits', () => {
       await submit({ fundId: 'calpers', edits: [EDIT] });
 
       const [{ output_config }] = create.mock.calls[0];
-      const keys =
-        output_config.format.schema.properties.lessons.items.properties.fieldKeys.items.enum;
-      expect(keys).toEqual(['total_investments']);
+      const lessons = output_config.format.schema.properties.lessons;
+      // One named property per corrected field: every correction gets exactly
+      // one verdict, and none can cover two fields at once.
+      expect(Object.keys(lessons.properties)).toEqual(['total_investments']);
+      expect(lessons.required).toEqual(['total_investments']);
+      expect(lessons.additionalProperties).toBe(false);
     });
 
     /** The corrections are the raw material. Losing them because the
@@ -895,21 +902,31 @@ describe('POST /analyses/:analysisId/edits', () => {
       // EDIT moves 462090073000 to 462090073 — a clean factor of a thousand.
       expect(analysis.lessons[0]).toMatchObject({
         type: 'units',
-        fieldKeys: ['total_investments'],
+        fieldKey: 'total_investments',
         unitsMultiplier: 1000,
       });
     });
 
-    /** Corrections that share a cause are one lesson, not several. */
-    it('groups corrections the recording can see one cause for', async () => {
+    /**
+     * A shared cause is reported, not bundled. One card per correction, so an
+     * analyst who agrees about one field and not the other can say so — a single
+     * card covering both would force them to reject the part that was right.
+     */
+    it('proposes one lesson per correction, and names the shared cause on each', async () => {
       process.env.USE_FIXTURES = 'true';
       const { analysis } = await submit({
         fundId: 'calpers',
         edits: [EDIT, { ...EDIT, id: 'e2', fieldKey: 'net_position', from: '5000', to: '5' }],
       });
 
-      expect(analysis.lessons).toHaveLength(1);
-      expect(analysis.lessons[0].fieldKeys).toEqual(['total_investments', 'net_position']);
+      expect(analysis.lessons).toHaveLength(2);
+      expect(analysis.lessons.map((l: { fieldKey: string }) => l.fieldKey)).toEqual([
+        'total_investments',
+        'net_position',
+      ]);
+      // Each knows the other moved for the same reason, without deciding for it.
+      expect(analysis.lessons[0].sharedWith).toEqual(['net_position']);
+      expect(analysis.lessons[1].sharedWith).toEqual(['total_investments']);
     });
 
     /** Never a lesson about a field the analyst did not touch. */
@@ -917,7 +934,7 @@ describe('POST /analyses/:analysisId/edits', () => {
       process.env.USE_FIXTURES = 'true';
       const { analysis } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-      const named = analysis.lessons.flatMap((l: { fieldKeys: string[] }) => l.fieldKeys);
+      const named = analysis.lessons.map((l: { fieldKey: string }) => l.fieldKey);
       expect(new Set(named)).toEqual(new Set(['total_investments']));
     });
   });
@@ -1033,7 +1050,10 @@ describe('applying what was learned', () => {
       content: [
         {
           type: 'text',
-          text: JSON.stringify({ summary: 'Here is what I think went wrong.', lessons: [proposed] }),
+          text: JSON.stringify({
+            summary: 'Here is what I think went wrong.',
+            lessons: { [proposed.fieldKey as string]: proposed },
+          }),
         },
       ],
       usage: { input_tokens: 1840, output_tokens: 410 },
@@ -1083,7 +1103,8 @@ describe('applying what was learned', () => {
   const SYNONYM = {
     type: 'synonym',
     scope: 'fund',
-    fieldKeys: ['net_position'],
+    fieldKey: 'net_position',
+    sharedWith: [],
     explanation: 'This issuer prints it differently.',
     rule: 'Treat "Fiduciary Balance Carried Forward" as net position for this fund.',
     unitsMultiplier: null,
@@ -1132,7 +1153,7 @@ describe('applying what was learned', () => {
    * units heading says.
    */
   it('enforces a ratified units lesson after the model has answered', async () => {
-    await ratify({ ...SYNONYM, type: 'units', unitsMultiplier: 1, documentLabel: '' });
+    await ratify({ ...SYNONYM, fieldKey: 'total_investments', type: 'units', unitsMultiplier: 1, documentLabel: '' });
     const { analysis, prompt, schema } = await nextDocument();
 
     const investments = analysis.fields.find((f: { key: string }) => f.key === 'total_investments');

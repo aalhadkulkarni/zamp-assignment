@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'node:timers/promises';
 import Anthropic from '@anthropic-ai/sdk';
-import type { Diagnosis, Lesson } from './diagnosis.js';
+import { toLessons, type Diagnosis, type Lesson } from './diagnosis.js';
 import type { Extraction } from './extraction.js';
 
 /**
@@ -363,9 +363,20 @@ export async function diagnose(
     .map((block) => block.text)
     .join('');
 
+  // The schema names one property per corrected field, so the model answers as
+  // an object. Flattened here, with the field it was keyed by carried onto the
+  // lesson, so nothing downstream has to know the wire shape.
+  const answer = JSON.parse(text) as {
+    summary: string;
+    lessons: Record<string, Omit<Lesson, 'id' | 'fieldKey'>>;
+  };
+
   return {
     model: response.model,
-    diagnosis: JSON.parse(text) as Diagnosis,
+    diagnosis: {
+      summary: answer.summary,
+      lessons: toLessons(answer.lessons ?? {}) as Lesson[],
+    },
     usage: {
       inputTokens: response.usage.input_tokens,
       outputTokens: response.usage.output_tokens,
@@ -404,73 +415,79 @@ export async function diagnoseFixture(
   await sleep(fixtureDelayMs());
 
   const corrections = parseCorrections(prompt);
-  const lessons: Lesson[] = [];
 
-  // A figure out by exactly a factor of a thousand is a units heading misread,
-  // and every field it happened to shares one cause.
+  // Every correction gets exactly one verdict, including the ones worth
+  // learning nothing from. A shared cause is reported on each of them rather
+  // than bundling them into one, so the analyst can agree about one field and
+  // not another.
   const scaled = corrections.filter((c) => scaleBetween(c.from, c.to) !== null);
-  if (scaled.length > 0) {
-    const multiplier = scaleBetween(scaled[0].from, scaled[0].to)!;
-    lessons.push({
-      id: 'lesson-units',
-      type: 'units',
-      scope: 'fund',
-      fieldKeys: scaled.map((c) => c.fieldKey),
-      explanation:
-        `Every figure you changed here is the one I read, moved by a factor of ` +
-        `${multiplier.toLocaleString('en-US')}. I applied the units heading; the values you kept ` +
-        `suggest this statement does not follow it.`,
-      rule: `For this fund, treat the figures in this statement as being in ${multiplier.toLocaleString('en-US')}s.`,
-      unitsMultiplier: multiplier,
-      documentLabel: '',
-      confidence: 'high',
-    });
-  }
+  const scaledKeys = scaled.map((c) => c.fieldKey);
 
-  // A value I left blank and you filled in is a label I did not recognise.
-  for (const filled of corrections.filter((c) => c.from === 'nothing' && c.to !== 'nothing')) {
-    lessons.push({
-      id: `lesson-label-${filled.fieldKey}`,
-      type: 'synonym',
-      scope: 'fund',
-      fieldKeys: [filled.fieldKey],
-      explanation:
-        'I left this blank because I was looking for a line naming it the way the field does. ' +
-        'The figure you entered is printed under a label I did not recognise as the same thing.',
-      rule: `Treat "Receivables, Net" as ${filled.fieldKey} for this fund.`,
-      unitsMultiplier: null,
-      documentLabel: 'Receivables, Net',
-      confidence: 'medium',
-    });
-  }
+  const lessons: Lesson[] = corrections.map((correction) => {
+    const multiplier = scaleBetween(correction.from, correction.to);
+    const others = (keys: string[]) => keys.filter((k) => k !== correction.fieldKey);
 
-  // Anything left: a real change I cannot attribute to scale or to a label.
-  const explained = new Set(lessons.flatMap((l) => l.fieldKeys));
-  const rest = corrections.filter((c) => !explained.has(c.fieldKey));
-  if (rest.length > 0) {
-    lessons.push({
-      id: 'lesson-column',
+    if (multiplier !== null) {
+      return {
+        id: `lesson-${correction.fieldKey}`,
+        type: 'units',
+        scope: 'fund',
+        fieldKey: correction.fieldKey,
+        sharedWith: others(scaledKeys),
+        explanation:
+          `The value you kept is the one I read, moved by a factor of ` +
+          `${multiplier.toLocaleString('en-US')}. I applied the units heading; this suggests the ` +
+          `statement does not follow it.` +
+          (others(scaledKeys).length > 0
+            ? ` The same looks true of ${others(scaledKeys).join(' and ')}.`
+            : ''),
+        rule: `For this fund, treat the figures in this statement as being in ${multiplier.toLocaleString('en-US')}s.`,
+        unitsMultiplier: multiplier,
+        documentLabel: '',
+        confidence: 'high',
+      };
+    }
+
+    if (correction.from === 'nothing') {
+      return {
+        id: `lesson-${correction.fieldKey}`,
+        type: 'synonym',
+        scope: 'fund',
+        fieldKey: correction.fieldKey,
+        sharedWith: [],
+        explanation:
+          'I left this blank because I was looking for a line naming it the way the field does. ' +
+          'The figure you entered is printed under a label I did not recognise as the same thing.',
+        rule: `Treat "Receivables, Net" as ${correction.fieldKey} for this fund.`,
+        unitsMultiplier: null,
+        documentLabel: 'Receivables, Net',
+        confidence: 'medium',
+      };
+    }
+
+    return {
+      id: `lesson-${correction.fieldKey}`,
       type: 'wrong_source',
       scope: 'fund',
-      fieldKeys: rest.map((c) => c.fieldKey),
+      fieldKey: correction.fieldKey,
+      sharedWith: [],
       explanation:
-        'The figures you kept are the ones printed in the Total column of the same rows I read. ' +
-        'I chose PERF A because it was the largest plan, but you want the fund as a whole.',
+        'The figure you kept is the one printed in the Total column of the row I read. I chose ' +
+        'PERF A because it was the largest plan, but you want the fund as a whole.',
       rule:
         'For this fund, read the Total column of the statement of fiduciary net position ' +
         'rather than an individual plan column.',
       unitsMultiplier: null,
       documentLabel: '',
       confidence: 'high',
-    });
-  }
+    };
+  });
 
   const summary =
-    lessons.length === 0
-      ? 'You changed nothing I can see a cause for, so there is nothing here worth remembering.'
-      : `I think ${lessons.length === 1 ? 'one thing' : `${lessons.length} separate things`} went wrong across ` +
-        `${corrections.length} correction${corrections.length === 1 ? '' : 's'}. ` +
-        'Each proposal below says how far I think it should reach.';
+    corrections.length === 0
+      ? 'You changed nothing I can see, so there is nothing here worth remembering.'
+      : `I have looked at ${corrections.length === 1 ? 'your correction' : `all ${corrections.length} corrections`} together, ` +
+        'and proposed one thing per field so you can agree about some and not others.';
 
   return {
     model: 'claude-opus-5',

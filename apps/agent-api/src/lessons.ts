@@ -71,18 +71,14 @@ export function planLessons(lessons: StoredLesson[]): LessonPlan {
         continue;
 
       case 'synonym': {
-        if (!lesson.documentLabel) continue;
-        for (const key of lesson.fieldKeys) {
-          notesFor(plan.guidance, key).alsoPrintedAs.push(lesson.documentLabel);
-        }
+        if (!lesson.documentLabel || !lesson.fieldKey) continue;
+        notesFor(plan.guidance, lesson.fieldKey).alsoPrintedAs.push(lesson.documentLabel);
         break;
       }
 
       case 'concept_confusion': {
-        if (!lesson.documentLabel) continue;
-        for (const key of lesson.fieldKeys) {
-          notesFor(plan.guidance, key).notThis.push(lesson.documentLabel);
-        }
+        if (!lesson.documentLabel || !lesson.fieldKey) continue;
+        notesFor(plan.guidance, lesson.fieldKey).notThis.push(lesson.documentLabel);
         break;
       }
 

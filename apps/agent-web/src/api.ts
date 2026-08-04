@@ -177,7 +177,9 @@ export type Lesson = {
   id: string;
   type: LessonType;
   scope: LessonScope;
-  fieldKeys: string[];
+  fieldKey: string;
+  /** Other corrected fields the agent thinks changed for the same reason. */
+  sharedWith: string[];
   explanation: string;
   rule: string;
   confidence: 'high' | 'medium' | 'low';

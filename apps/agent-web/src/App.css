@@ -344,6 +344,12 @@
 }
 
 /* The edit itself, sitting directly above the agent's explanation of it. */
+.lesson-shared {
+  margin-top: 8px;
+  font-size: 12px;
+  font-style: italic;
+}
+
 .lesson-corrections {
   list-style: none;
   margin: 10px 0 0;

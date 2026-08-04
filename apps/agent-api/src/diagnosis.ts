@@ -26,8 +26,16 @@ export type Lesson = {
   id: string;
   type: LessonType;
   scope: LessonScope;
-  /** Which corrections this explains. Several fields can share one cause. */
-  fieldKeys: string[];
+  /** The one correction this explains. */
+  fieldKey: string;
+  /**
+   * Other corrected fields the model thinks share this cause.
+   *
+   * Information, not a decision. The analyst still ratifies each field on its
+   * own — see the note above diagnosisSchema — but knowing that four fields
+   * moved for what looks like one reason is worth saying.
+   */
+  sharedWith: string[];
   /** One or two sentences an analyst can ratify in seconds. */
   explanation: string;
   /** What would change next time, in plain language. */
@@ -53,81 +61,104 @@ export type Diagnosis = {
   lessons: Lesson[];
 };
 
+/** The model answers by field name; the rest of the system works in lessons. */
+export function toLessons(byField: Record<string, Omit<Lesson, 'id' | 'fieldKey'>>): Omit<Lesson, 'id'>[] {
+  return Object.entries(byField).map(([fieldKey, lesson]) => ({ ...lesson, fieldKey }));
+}
+
 /**
- * Lessons are proposed against the whole batch rather than one per correction,
- * so the model can say "these four are one units mistake" instead of inventing
- * four unrelated causes. `fieldKeys` is what carries that grouping.
+ * One lesson per corrected field, named as its own property.
+ *
+ * The corrections still go up in a single call, because a cause is often only
+ * visible across several of them — four values all moved by a factor of a
+ * thousand is one misread heading, and asked one at a time the model can only
+ * ever find four coincidences.
+ *
+ * But a card is a single ratification, and bundling four fields into one would
+ * force all-or-nothing on a rule that may hold for three of them. The analyst
+ * would have to reject the whole proposal to disagree about one field, losing
+ * the part that was right. So the shared cause is reported as information —
+ * `sharedWith` — while the decision stays per field.
+ *
+ * Named properties rather than an array, for the same reason as the extraction
+ * schema: it is the only shape in which "one verdict per correction, no more and
+ * no fewer" is a property of the contract rather than a hope about the model.
  *
  * `id` is generated here rather than asked for. A model inventing identifiers is
  * a way to get collisions and hallucinated references for no benefit.
  */
 export function diagnosisSchema(fieldKeys: string[]) {
+  const lesson = {
+    type: 'object',
+    properties: {
+      type: {
+        type: 'string',
+        enum: [...LESSON_TYPES],
+        description:
+          'typo: a one-off slip, nothing to learn. wrong_source: the value was read from the wrong table, column or row. units: the figure was right but the scale was not. concept_confusion: a different concept was extracted than the one the field asks for. synonym: the label in this document was not recognised as this field.',
+      },
+      scope: {
+        type: 'string',
+        enum: [...LESSON_SCOPES],
+        description:
+          'none: applies to this document only, nothing should be remembered. fund: applies to every future document from this fund. global: applies to every document from every fund. Prefer the narrowest scope that fits.',
+      },
+      sharedWith: {
+        type: 'array',
+        items: { type: 'string', enum: fieldKeys },
+        description:
+          'Other corrected fields you think changed for this same reason. Empty when this one stands alone. Naming them here does not bundle them together — the analyst still decides each field separately.',
+      },
+      explanation: {
+        type: 'string',
+        description:
+          'Why you think this happened to this field, addressed to the analyst. One or two sentences they can agree or disagree with quickly.',
+      },
+      rule: {
+        type: 'string',
+        description:
+          'What you would do differently next time, stated as an instruction to yourself. Empty when the scope is none.',
+      },
+      unitsMultiplier: {
+        type: ['number', 'null'],
+        description:
+          'Only when type is units: what the figures in this document are actually in, as a number — 1000 for thousands, 1000000 for millions. Null for every other type.',
+      },
+      documentLabel: {
+        type: 'string',
+        description:
+          'Only when type is synonym or concept_confusion: the label exactly as printed in the document, copied character for character. For a synonym this is the label that should have been recognised; for a concept_confusion it is the label that was read by mistake. Empty string for every other type.',
+      },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
+    },
+    required: [
+      'type',
+      'scope',
+      'sharedWith',
+      'explanation',
+      'rule',
+      'unitsMultiplier',
+      'documentLabel',
+      'confidence',
+    ],
+    additionalProperties: false,
+  };
+
   return {
     type: 'object',
     properties: {
       summary: {
         type: 'string',
         description:
-          'Two or three sentences to the analyst about what you think went wrong. Plain prose, no markdown.',
+          'Two or three sentences to the analyst about what you think went wrong across all of these corrections. Plain prose, no markdown.',
       },
       lessons: {
-        type: 'array',
+        type: 'object',
         description:
-          'One entry per distinct cause. Corrections that share a cause belong in the same entry.',
-        items: {
-          type: 'object',
-          properties: {
-            type: {
-              type: 'string',
-              enum: [...LESSON_TYPES],
-              description:
-                'typo: a one-off slip, nothing to learn. wrong_source: the value was read from the wrong table, column or row. units: the figure was right but the scale was not. concept_confusion: a different concept was extracted than the one the field asks for. synonym: the label in this document was not recognised as this field.',
-            },
-            scope: {
-              type: 'string',
-              enum: [...LESSON_SCOPES],
-              description:
-                'none: applies to this document only, nothing should be remembered. fund: applies to every future document from this fund. global: applies to every document from every fund. Prefer the narrowest scope that fits.',
-            },
-            fieldKeys: {
-              type: 'array',
-              items: { type: 'string', enum: fieldKeys },
-              description: 'The corrections this explains.',
-            },
-            explanation: {
-              type: 'string',
-              description:
-                'Why you think this happened, addressed to the analyst. One or two sentences they can agree or disagree with quickly.',
-            },
-            rule: {
-              type: 'string',
-              description:
-                'What you would do differently next time, stated as an instruction to yourself. Empty when the scope is none.',
-            },
-            unitsMultiplier: {
-              type: ['number', 'null'],
-              description:
-                'Only when type is units: what the figures in this document are actually in, as a number — 1000 for thousands, 1000000 for millions. Null for every other type.',
-            },
-            documentLabel: {
-              type: 'string',
-              description:
-                'Only when type is synonym or concept_confusion: the label exactly as printed in the document, copied character for character. For a synonym this is the label that should have been recognised; for a concept_confusion it is the label that was read by mistake. Empty string for every other type.',
-            },
-            confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-          },
-          required: [
-            'type',
-            'scope',
-            'fieldKeys',
-            'explanation',
-            'rule',
-            'unitsMultiplier',
-            'documentLabel',
-            'confidence',
-          ],
-          additionalProperties: false,
-        },
+          'One entry per corrected field. Every field must appear exactly once, including any you think was a slip worth learning nothing from — say so with type typo and scope none rather than leaving it out.',
+        properties: Object.fromEntries(fieldKeys.map((key) => [key, lesson])),
+        required: fieldKeys,
+        additionalProperties: false,
       },
     },
     required: ['summary', 'lessons'],

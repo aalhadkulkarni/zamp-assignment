@@ -774,7 +774,8 @@ describe('sending', () => {
       id: 'lesson-1',
       type: 'units' as const,
       scope: 'fund' as const,
-      fieldKeys: ['total_investments'],
+      fieldKey: 'total_investments',
+    sharedWith: [],
       explanation: 'I applied the thousands heading, but the figure you kept is the printed one.',
       rule: 'For this fund, check whether the investments section restates its units.',
       unitsMultiplier: 1,
@@ -1419,7 +1420,8 @@ describe('while the agent is explaining a correction', () => {
     id: 'lesson-1',
     type: 'units' as const,
     scope: 'fund' as const,
-    fieldKeys: ['total_investments'],
+    fieldKey: 'total_investments',
+    sharedWith: [],
     explanation: 'I applied the thousands heading, but the figure you kept is the printed one.',
     rule: 'For this fund, check whether the investments section restates its units.',
     unitsMultiplier: 1,
@@ -1576,7 +1578,8 @@ describe('the evidence on a lesson card', () => {
     id: 'lesson-1',
     type: 'units' as const,
     scope: 'fund' as const,
-    fieldKeys: ['total_investments'],
+    fieldKey: 'total_investments',
+    sharedWith: [],
     explanation: 'I applied the thousands heading.',
     rule: 'For this fund, treat the figures as being in 1,000s.',
     unitsMultiplier: 1000,
@@ -1614,7 +1617,7 @@ describe('the evidence on a lesson card', () => {
 
   /** A slip the agent decided is not worth a rule names nothing, on purpose. */
   it('names nothing when the lesson explains no correction', async () => {
-    await proposalShown({ ...LESSON, fieldKeys: [], corrections: [] });
+    await proposalShown({ ...LESSON, fieldKey: '', corrections: [] });
 
     const card = screen.getByText('Wrong units').closest('.lesson')!;
     expect(card.querySelector('.lesson-corrections')).toBeNull();
@@ -1632,7 +1635,8 @@ describe('recording a decision on a lesson', () => {
     id: 'lesson-1',
     type: 'units' as const,
     scope: 'fund' as const,
-    fieldKeys: ['total_investments'],
+    fieldKey: 'total_investments',
+    sharedWith: [],
     explanation: 'I applied the thousands heading.',
     rule: 'For this fund, treat the figures as being in 1,000s.',
     unitsMultiplier: 1000,
@@ -1716,5 +1720,100 @@ describe('recording a decision on a lesson', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('agent-api is unreachable');
     expect(screen.getByRole('button', { name: 'Remember this' })).toBeEnabled();
+  });
+});
+
+/**
+ * A card is a single ratification, so it covers a single correction. When the
+ * agent thinks several corrections share a cause it says so on each of them
+ * rather than bundling them — otherwise disagreeing about one field would mean
+ * rejecting a rule that was right about the other three.
+ */
+describe('a shared cause across corrections', () => {
+  const shared = (fieldKey: string, sharedWith: string[], from: string, to: string) => ({
+    id: `lesson-${fieldKey}`,
+    type: 'units' as const,
+    scope: 'fund' as const,
+    fieldKey,
+    sharedWith,
+    explanation: `The value you kept for ${fieldKey} is the one I read, moved by a factor of 1,000.`,
+    rule: 'For this fund, treat the figures as being in 1,000s.',
+    unitsMultiplier: 1000,
+    documentLabel: '',
+    confidence: 'high' as const,
+    corrections: [{ fieldKey, from, to }],
+  });
+
+  async function twoProposals() {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    server.diagnoses({
+      summary: 'Two corrections, one cause, decided separately.',
+      lessons: [
+        shared('total_investments', ['total_receivables'], '462090073000', '462090073'),
+        shared('total_receivables', ['total_investments'], '9113704000', '9113704'),
+      ],
+    });
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    await screen.findAllByText('Wrong units');
+    return user;
+  }
+
+  it('shows one card per correction, not one for the cause', async () => {
+    await twoProposals();
+
+    expect(screen.getAllByText('Wrong units')).toHaveLength(2);
+    expect(document.querySelectorAll('.lesson')).toHaveLength(2);
+  });
+
+  it('says on each card which others look like the same cause', async () => {
+    await twoProposals();
+
+    expect(
+      screen.getByText(/Looks like the same cause as total_receivables — decided separately\./),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Looks like the same cause as total_investments — decided separately\./),
+    ).toBeInTheDocument();
+  });
+
+  /** The point of the split: agree about one field without agreeing about the other. */
+  it('lets one be accepted while the other is still open', async () => {
+    const user = await twoProposals();
+
+    await user.click(screen.getAllByRole('button', { name: 'Remember this' })[0]);
+
+    expect(await screen.findByText(/^Accepted —/)).toBeInTheDocument();
+    // The second is untouched and still awaiting a decision.
+    expect(screen.getAllByRole('button', { name: 'Remember this' })).toHaveLength(1);
+  });
+
+  it('says nothing about a shared cause when there is none', async () => {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    server.diagnoses({
+      summary: 'One correction, one cause.',
+      lessons: [shared('total_investments', [], '462090073000', '462090073')],
+    });
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    await screen.findByText('Wrong units');
+
+    expect(screen.queryByText(/Looks like the same cause/)).not.toBeInTheDocument();
   });
 });

@@ -165,7 +165,13 @@ const SCHEMA = `
     fund_id     text,
     type        text NOT NULL,
     scope       text NOT NULL,
-    field_keys  jsonb NOT NULL,
+    -- One lesson per corrected field. It was an array, which let one proposal
+    -- cover four fields — and a card is a single ratification, so disagreeing
+    -- about one of them meant rejecting the rule for all four.
+    field_key    text NOT NULL DEFAULT '',
+    -- The other fields the model thinks changed for the same reason. Reported,
+    -- not bundled: the analyst still decides each one.
+    shared_with  jsonb NOT NULL DEFAULT '[]'::jsonb,
     explanation text NOT NULL,
     rule        text NOT NULL,
     -- The two typed payloads. A units lesson is a number we do arithmetic with;
@@ -204,6 +210,13 @@ const SCHEMA = `
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_state text NOT NULL DEFAULT 'idle';
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_error text;
   ALTER TABLE message ADD COLUMN IF NOT EXISTS corrections jsonb;
+  ALTER TABLE lesson ADD COLUMN IF NOT EXISTS field_key text NOT NULL DEFAULT '';
+  ALTER TABLE lesson ADD COLUMN IF NOT EXISTS shared_with jsonb NOT NULL DEFAULT '[]'::jsonb;
+  -- field_key replaces it. A column that is gone from the schema above is still
+  -- there in a database created before the change, and NOT NULL makes it fatal
+  -- rather than merely untidy. The tests could not catch this: pg-mem builds
+  -- every table from scratch, so it never has the old shape to begin with.
+  ALTER TABLE lesson DROP COLUMN IF EXISTS field_keys;
 `;
 
 export async function migrate(): Promise<void> {

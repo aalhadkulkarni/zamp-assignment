@@ -13,7 +13,8 @@ function lesson(overrides: Partial<StoredLesson>): StoredLesson {
     id: 'l1',
     type: 'typo',
     scope: 'fund',
-    fieldKeys: ['net_position'],
+    fieldKey: 'net_position',
+    sharedWith: [],
     explanation: 'because',
     rule: '',
     unitsMultiplier: null,
@@ -27,7 +28,7 @@ function lesson(overrides: Partial<StoredLesson>): StoredLesson {
 describe('planLessons', () => {
   it('attaches a synonym to the field it is a synonym for', () => {
     const plan = planLessons([
-      lesson({ type: 'synonym', fieldKeys: ['net_position'], documentLabel: 'Plan Net Assets' }),
+      lesson({ type: 'synonym', fieldKey: 'net_position', documentLabel: 'Plan Net Assets' }),
     ]);
 
     expect(plan.guidance.get('net_position')).toEqual({
@@ -46,11 +47,12 @@ describe('planLessons', () => {
    */
   it('keeps a concept confusion opposite to a synonym on the same field', () => {
     const plan = planLessons([
-      lesson({ type: 'synonym', fieldKeys: ['net_position'], documentLabel: 'Plan Net Assets' }),
+      lesson({ type: 'synonym', fieldKey: 'net_position', documentLabel: 'Plan Net Assets' }),
       lesson({
         id: 'l2',
         type: 'concept_confusion',
-        fieldKeys: ['net_position'],
+        fieldKey: 'net_position',
+    sharedWith: [],
         documentLabel: 'Total Fund Balance',
       }),
     ]);
@@ -121,7 +123,12 @@ describe('describePlan', () => {
     const text = describePlan(
       planLessons([
         lesson({ type: 'synonym', documentLabel: 'Plan Net Assets' }),
-        lesson({ id: 'l2', type: 'synonym', documentLabel: 'Fiduciary Net Position' }),
+        lesson({
+          id: 'l2',
+          type: 'synonym',
+          fieldKey: 'total_assets',
+          documentLabel: 'Fiduciary Net Position',
+        }),
         lesson({ id: 'l3', type: 'units', unitsMultiplier: 1000 }),
       ]),
     );

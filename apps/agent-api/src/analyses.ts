@@ -22,7 +22,9 @@ export type StoredLesson = {
   id: string;
   type: LessonType;
   scope: LessonScope;
-  fieldKeys: string[];
+  fieldKey: string;
+  /** Other corrected fields the model thinks share this cause. Information. */
+  sharedWith: string[];
   explanation: string;
   rule: string;
   unitsMultiplier: number | null;
@@ -121,7 +123,7 @@ export async function getAnalysis(
       [analysisId],
     ),
     pool.query(
-      `SELECT id, type, scope, field_keys, explanation, rule, units_multiplier,
+      `SELECT id, type, scope, field_key, shared_with, explanation, rule, units_multiplier,
               document_label, confidence, decision, comment, batch_id
          FROM lesson WHERE analysis_id = $1 ORDER BY created_at`,
       [analysisId],
@@ -205,8 +207,7 @@ export async function getAnalysis(
         allCorrections.rows
           .filter(
             (c) =>
-              c.batch_id === row.batch_id &&
-              (row.field_keys as string[]).includes(c.field_key as string),
+              c.batch_id === row.batch_id && c.field_key === row.field_key,
           )
           .map((c) => ({
             fieldKey: c.field_key as string,
@@ -447,10 +448,10 @@ export async function storeLessons(
   for (const lesson of lessons) {
     const { rows } = await pool.query(
       `INSERT INTO lesson (id, tenant_id, analysis_id, batch_id, fund_id, type, scope,
-                           field_keys, explanation, rule, units_multiplier,
+                           field_key, shared_with, explanation, rule, units_multiplier,
                            document_label, confidence)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-       RETURNING id, type, scope, field_keys, explanation, rule, units_multiplier,
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+       RETURNING id, type, scope, field_key, shared_with, explanation, rule, units_multiplier,
               document_label, confidence, decision, comment`,
       [
         tenantId,
@@ -461,7 +462,8 @@ export async function storeLessons(
         lesson.scope === 'global' ? null : fundId,
         lesson.type,
         lesson.scope,
-        JSON.stringify(lesson.fieldKeys),
+        lesson.fieldKey,
+        JSON.stringify(lesson.sharedWith),
         lesson.explanation,
         lesson.rule,
         lesson.unitsMultiplier,
@@ -484,7 +486,7 @@ export async function decideLesson(
   const { rows } = await getPool().query(
     `UPDATE lesson SET decision = $3, comment = $4, decided_at = now()
        WHERE id = $2 AND tenant_id = $1
-     RETURNING id, type, scope, field_keys, explanation, rule, units_multiplier,
+     RETURNING id, type, scope, field_key, shared_with, explanation, rule, units_multiplier,
               document_label, confidence, decision, comment`,
     [tenantId, lessonId, decision, comment],
   );
@@ -557,7 +559,7 @@ export async function applicableLessons(
   fundId: string,
 ): Promise<StoredLesson[]> {
   const { rows } = await getPool().query(
-    `SELECT id, type, scope, field_keys, explanation, rule, units_multiplier,
+    `SELECT id, type, scope, field_key, shared_with, explanation, rule, units_multiplier,
               document_label, confidence, decision, comment
        FROM lesson
       WHERE tenant_id = $1
@@ -591,7 +593,8 @@ function toLesson(
     id: row.id as string,
     type: row.type as LessonType,
     scope: row.scope as LessonScope,
-    fieldKeys: row.field_keys as string[],
+    fieldKey: (row.field_key as string) ?? '',
+    sharedWith: (row.shared_with as string[]) ?? [],
     explanation: row.explanation as string,
     rule: row.rule as string,
     unitsMultiplier: numeric(row.units_multiplier),
