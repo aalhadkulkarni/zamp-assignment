@@ -266,12 +266,13 @@ timeout and no message.
 down is gone — nothing replays it, so a client listening only for `changed`
 waits for a notification that has already been and passed.
 
-This was listed as *partial* and then happened during the first real-API test: a
-five-field extraction completed, the database had it, and the browser sat on
-"Reading your documents…" indefinitely. The client now re-reads whenever the
-stream opens, and `open` fires again on every reconnect. Re-reading when nothing
-changed costs one idempotent request, which is a good trade against never
-finding out.
+The client now re-reads whenever the stream opens, and `open` fires again on
+every reconnect. Re-reading when nothing changed costs one idempotent request,
+which is a good trade against never finding out.
+
+Worth noting the symptom that prompted this turned out to be something else
+entirely — stale dev servers holding the ports, so the browser was talking to an
+old build. The gap here is real, but it has not been observed in the wild.
 
 ### 6.3 Extraction finishes while the analyst is elsewhere · **open**
 The watcher is torn down on leaving the workspace, and the analysis list shows no

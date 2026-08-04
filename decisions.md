@@ -477,12 +477,14 @@ What is not built: overruling is a sentence in the chat that nothing acts on. Se
 
 33 - The client re-reads when the stream opens, not only when it is told to.
 
-Found in the first real test against the API, which is the only reason it was found at all.
+An extraction completed, the database had all five values, and the browser sat on "Reading your documents" indefinitely.
 
-An extraction completed. The database had all five values and the analysis was marked idle. The browser sat on "Reading your documents" indefinitely, and would have done so forever.
+The change itself is right and stands: a notification published while the event stream is down is gone, because nothing replays it. EventSource reconnects on its own, so a client listening only for `changed` can end up waiting on a message that has already been sent and missed. It now re-reads whenever the stream opens, and `open` fires again on every reconnect. Re-reading when nothing changed costs one idempotent request.
 
-Everything worked except the last step. The notification was published, and both running instances were holding a live LISTEN connection - I checked pg_stat_activity rather than guessing. What failed is that the browser's event stream had dropped and reconnected at some point, and a notification published during that gap is simply gone. Nothing replays it. The client was listening for `changed` and only `changed`, so it was waiting on a message that had already been sent and missed.
+But it was not what was happening, and the first version of this entry said it was. The real cause was operational and mine: stale dev servers of my own were holding ports 3001 and 3002, so the developer's own `npm run dev` had died on EADDRINUSE without either of us reading the output, and the browser was talking to an old build with a long-dead LISTEN connection. On a single clean instance the notification arrives in under a second, which I should have established before changing any code.
 
-The fix is that the client re-reads whenever the stream opens. EventSource fires `open` again on every reconnect, so a dropped connection now ends with the client asking what it missed rather than assuming it missed nothing. Re-reading when nothing changed costs one request and is idempotent.
+Two things worth keeping from that.
 
-Worth recording that this was already written down. It was in EdgeCases as 6.2, marked partial, with the words "the client should re-read on reconnect regardless" - and I left it, because it looked like a rare case. It took one real test to hit it. The lesson is not about SSE: a known gap that produces an infinite spinner is not a rare case worth deferring, because the failure mode is indistinguishable from the product being broken.
+I diagnosed from a plausible theory rather than from a measurement. The evidence I gathered - extraction completed, notification published, LISTEN connections alive in pg_stat_activity - was all consistent with the reconnect theory and also consistent with the true cause, and I did not look for the test that would separate them. That test took two minutes: open a stream, publish a notification by hand, see whether it arrives. It did not.
+
+And a bug that will not reproduce on a clean environment is worth checking is not the environment. "Consistently reproducible" was what made me look harder, which is the right instinct - but only after I had already shipped a fix for it.
