@@ -1,39 +1,53 @@
+import { useState } from 'react';
+import type { StoredAnalysis } from '../api';
+import type { EditEvent } from '../types';
 import ChatPanel from './ChatPanel';
+import Composer from './Composer';
 import LessonCard from './LessonCard';
 import PendingEdits from './PendingEdits';
 import ReviewTable from './ReviewTable';
-import Composer from './Composer';
-import type { Analysis } from '../types';
 
 type Props = {
-  analysis: Analysis;
+  analysis: StoredAnalysis;
+  edits: Record<string, string>;
+  editEvents: EditEvent[];
+  writeProblems: Record<string, string>;
+  writing: boolean;
+  failure: string | null;
   onSend: (text: string, files: File[]) => Promise<boolean>;
   onEdit: (key: string, value: string) => void;
   onCommit: (key: string) => void;
   onRevert: (key: string) => void;
+  onConfirm: (fiscalYearEnd: string) => void;
   onAcceptLesson: (lessonId: string) => void;
   onRejectLesson: (lessonId: string, comment: string) => void;
-  onPeriodChange: (fiscalYearEnd: string) => void;
-  onConfirm: () => void;
-  writing: boolean;
   onBack: () => void;
 };
 
 export default function Workspace({
   analysis,
+  edits,
+  editEvents,
+  writeProblems,
+  writing,
+  failure,
   onSend,
   onEdit,
   onCommit,
   onRevert,
+  onConfirm,
   onAcceptLesson,
   onRejectLesson,
-  onPeriodChange,
-  onConfirm,
-  writing,
   onBack,
 }: Props) {
-  const editCount = Object.keys(analysis.edits).length;
   const approved = analysis.status === 'approved';
+  const [fiscalYearEnd, setFiscalYearEnd] = useState(analysis.fiscalYearEnd);
+  const editCount = Object.keys(edits).length;
+
+  // Decided cards stay, showing what was decided. Removing them on click would
+  // leave the analyst with no sign that anything happened, and no record of
+  // what they agreed to.
+  const lessons = analysis.lessons;
 
   return (
     <div className="workspace">
@@ -49,11 +63,15 @@ export default function Workspace({
         <section className="chat" aria-label="Agent conversation">
           <ChatPanel messages={analysis.messages} />
 
-          {/* Proposals sit above the composer, where the analyst's attention
-              already is once they have submitted. */}
-          {analysis.lessons.length > 0 && (
+          {failure && (
+            <p className="form-error chat-failure" role="alert">
+              {failure}
+            </p>
+          )}
+
+          {lessons.length > 0 && (
             <section className="lessons" aria-label="Proposed lessons">
-              {analysis.lessons.map((lesson) => (
+              {lessons.map((lesson) => (
                 <LessonCard
                   key={lesson.id}
                   lesson={lesson}
@@ -64,7 +82,7 @@ export default function Workspace({
             </section>
           )}
 
-          {!approved && <PendingEdits edits={analysis.editEvents} />}
+          {!approved && <PendingEdits edits={editEvents} />}
           <Composer onSend={onSend} />
         </section>
 
@@ -81,8 +99,8 @@ export default function Workspace({
             <>
               <ReviewTable
                 fields={analysis.fields}
-                edits={analysis.edits}
-                problems={analysis.writeProblems}
+                edits={edits}
+                problems={writeProblems}
                 readOnly={approved}
                 onEdit={onEdit}
                 onCommit={onCommit}
@@ -103,8 +121,8 @@ export default function Workspace({
                       <input
                         id="fiscal-year-end"
                         type="date"
-                        value={analysis.fiscalYearEnd}
-                        onChange={(e) => onPeriodChange(e.target.value)}
+                        value={fiscalYearEnd}
+                        onChange={(e) => setFiscalYearEnd(e.target.value)}
                       />
                     </div>
 
@@ -116,10 +134,10 @@ export default function Workspace({
 
                     <button
                       className="primary"
-                      onClick={onConfirm}
+                      onClick={() => onConfirm(fiscalYearEnd)}
                       // The period is the customer's uniqueness key. Writing
                       // without it would be refused anyway, and less clearly.
-                      disabled={writing || analysis.fiscalYearEnd === ''}
+                      disabled={writing || fiscalYearEnd === ''}
                     >
                       {writing ? 'Writing…' : 'Confirm and write'}
                     </button>

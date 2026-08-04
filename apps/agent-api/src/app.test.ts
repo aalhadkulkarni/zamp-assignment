@@ -1,10 +1,8 @@
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp } from './app.js';
 import { MAX_FILE_BYTES, MAX_FILES_PER_UPLOAD } from './config.js';
-import { uploadDir } from './documents.js';
+import { getPool } from './db.js';
+import { startTestDatabase } from './testing.js';
 
 /**
  * The Anthropic SDK is stubbed for every test in this file. The upload route
@@ -60,14 +58,13 @@ vi.mock('./customer.js', async (importOriginal) => ({
  */
 let app: Awaited<ReturnType<typeof buildApp>>;
 let baseUrl: string;
-let dataRoot: string;
 
 const TENANT = 'demo-tenant';
-const ANALYSIS = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
+/** Created fresh per test, because an analysis row now has to exist first. */
+let ANALYSIS: string;
 
 beforeAll(async () => {
-  dataRoot = await mkdtemp(join(tmpdir(), 'agent-api-test-'));
-  process.env.DATA_DIR = dataRoot;
+  await startTestDatabase();
 
   app = await buildApp();
   await app.listen({ port: 0, host: '127.0.0.1' });
@@ -78,7 +75,6 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app.close();
-  await rm(dataRoot, { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -98,9 +94,20 @@ beforeEach(() => {
   });
 });
 
-afterEach(async () => {
-  await rm(join(dataRoot, TENANT), { recursive: true, force: true });
+beforeEach(async () => {
+  // A clean database per test: analyses cascade, so one delete clears the lot.
+  await getPool().query('DELETE FROM analysis');
+  await getPool().query('DELETE FROM lesson');
+
+  const res = await app.inject({
+    method: 'POST',
+    url: '/analyses',
+    payload: { fundId: 'calpers' },
+  });
+  ANALYSIS = res.json().id;
 });
+
+
 
 /** Printed in thousands, as the document prints it, so units are exercised. */
 const EXTRACTION = {
@@ -180,56 +187,58 @@ describe('POST /analyses/:analysisId/documents', () => {
     expect(body.analysisId).toBe(ANALYSIS);
     expect(body.uploadId).toMatch(/^[0-9a-f-]{36}$/);
     expect(body.documents).toEqual([
-      { id: expect.any(String), filename: 'acfr.pdf', storedAs: 'acfr.pdf', size: 128 },
-      { id: expect.any(String), filename: 'notes.md', storedAs: 'notes.md', size: 32 },
+      { id: expect.any(String), filename: 'acfr.pdf', size: 128 },
+      { id: expect.any(String), filename: 'notes.md', size: 32 },
     ]);
   });
 
   /**
-   * Sanitising decides where the bytes land, not what the analyst may call their
-   * file. Reporting the sanitised name back made it look like we had renamed
-   * their document.
+   * Names are no longer altered. Sanitising them was about stopping a filename
+   * steering a write out of its directory; the bytes are in a column now, so
+   * there is no path to steer and no reason to show an analyst a name they did
+   * not choose.
    */
-  it('reports the name the analyst chose, and stores under a safe one', async () => {
+  it('keeps the name the analyst gave the file', async () => {
     const { body } = await upload([
       new File([new Uint8Array(64)], 'AllTeams - GW2 (1).pdf', { type: 'application/pdf' }),
     ]);
 
     expect(body.documents[0].filename).toBe('AllTeams - GW2 (1).pdf');
-    expect(body.documents[0].storedAs).toBe('AllTeams - GW2 _1_.pdf');
 
-    const written = await readdir(uploadDir(TENANT, ANALYSIS));
-    expect(written.some((f) => f.endsWith('AllTeams - GW2 _1_.pdf'))).toBe(true);
-
-    // The document is titled with the analyst's name, not our sanitised one.
     const [{ messages }] = create.mock.calls[0];
     const attached = messages[0].content.find((b: { type: string }) => b.type === 'document');
     expect(attached.title).toBe('AllTeams - GW2 (1).pdf');
   });
 
-  it('writes the bytes to disk under the tenant and analysis', async () => {
-    const { body } = await upload([pdf('acfr.pdf', 128)]);
+  it('stores the bytes themselves, not a path to them', async () => {
+    await upload([pdf('acfr.pdf', 128)]);
 
-    const dir = uploadDir(TENANT, ANALYSIS);
-    const written = await readdir(dir);
-    const documentFile = written.find((f) => f.endsWith('acfr.pdf'));
+    const { rows } = await getPool().query(
+      'SELECT filename, size_bytes, bytes FROM document WHERE analysis_id = $1',
+      [ANALYSIS],
+    );
 
-    expect(documentFile).toBeDefined();
-    expect((await readFile(join(dir, documentFile!))).length).toBe(128);
-    expect(written).toContain(`upload-${body.uploadId}.json`);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].filename).toBe('acfr.pdf');
+    // Byte-identical, because the diagnosis reads these back to look at the page.
+    expect(Buffer.isBuffer(rows[0].bytes)).toBe(true);
+    expect(rows[0].bytes.length).toBe(128);
+    expect(rows[0].size_bytes).toBe(128);
   });
 
-  it('records the prompt in the manifest alongside the documents', async () => {
-    const { body } = await upload([pdf('acfr.pdf')], {
+  it('keeps the analyst note as part of the conversation', async () => {
+    await upload([pdf('acfr.pdf')], {
       prompt: 'Figures in the net position table are in thousands.',
     });
 
-    const manifest = JSON.parse(
-      await readFile(join(uploadDir(TENANT, ANALYSIS), `upload-${body.uploadId}.json`), 'utf8'),
+    // It was a field in a manifest file; it is a message now, which is what it
+    // always was — something the analyst said.
+    const { rows } = await getPool().query(
+      "SELECT body, attachments FROM message WHERE analysis_id = $1 AND author = 'analyst'",
+      [ANALYSIS],
     );
-    expect(manifest.prompt).toBe('Figures in the net position table are in thousands.');
-    expect(manifest.tenantId).toBe(TENANT);
-    expect(manifest.documents).toHaveLength(1);
+    expect(rows[0].body).toBe('Figures in the net position table are in thousands.');
+    expect(rows[0].attachments).toEqual([{ name: 'acfr.pdf', size: 64 }]);
   });
 
   it('accepts an upload with no prompt', async () => {
@@ -262,8 +271,11 @@ describe('POST /analyses/:analysisId/documents', () => {
       { filename: 'bad.docx', reason: expect.stringMatching(/Unsupported file type/) },
     ]);
 
-    // Nothing was written, including the document that was fine on its own.
-    await expect(readdir(uploadDir(TENANT, ANALYSIS))).rejects.toThrow();
+    // Nothing was stored, including the document that was fine on its own.
+    const { rows } = await getPool().query('SELECT 1 FROM document WHERE analysis_id = $1', [
+      ANALYSIS,
+    ]);
+    expect(rows).toHaveLength(0);
   });
 
   /**
@@ -385,11 +397,14 @@ describe('POST /analyses/:analysisId/documents', () => {
       });
     });
 
-    it('still writes the documents to disk', async () => {
+    it('still stores the documents', async () => {
       await failWith(await sdkError('APIError', 529));
 
-      const written = await readdir(uploadDir(TENANT, ANALYSIS));
-      expect(written.some((f) => f.endsWith('acfr.pdf'))).toBe(true);
+      const { rows } = await getPool().query(
+        'SELECT filename FROM document WHERE analysis_id = $1',
+        [ANALYSIS],
+      );
+      expect(rows.map((r) => r.filename)).toEqual(['acfr.pdf']);
     });
 
     it('names a missing API key rather than blaming the upload', async () => {
@@ -445,8 +460,10 @@ describe('POST /analyses/:analysisId/documents', () => {
       process.env.USE_FIXTURES = 'true';
       await upload([pdf('acfr.pdf', 128)]);
 
-      const written = await readdir(uploadDir(TENANT, ANALYSIS));
-      expect(written.some((f) => f.endsWith('acfr.pdf'))).toBe(true);
+      const { rows } = await getPool().query('SELECT filename FROM document WHERE analysis_id = $1', [
+        ANALYSIS,
+      ]);
+      expect(rows.map((r) => r.filename)).toEqual(['acfr.pdf']);
     });
 
     it('is off unless explicitly switched on', async () => {
@@ -465,15 +482,18 @@ describe('POST /analyses/:analysisId/documents', () => {
     });
   });
 
-  it('stores a document whose name would otherwise escape the upload folder', async () => {
-    const { status } = await upload([
+  /**
+   * A filename is data now, not a path — it is a column value and cannot steer
+   * anything. The multipart layer happens to strip the directory part before we
+   * ever see it, which is belt to our braces rather than something we rely on.
+   */
+  it('accepts a document whose name looks like a path traversal', async () => {
+    const { status, body } = await upload([
       new File([new Uint8Array(64)], '../../../etc/passwd.pdf', { type: 'application/pdf' }),
     ]);
 
     expect(status).toBe(200);
-    const written = await readdir(uploadDir(TENANT, ANALYSIS));
-    expect(written.some((f) => f.endsWith('passwd.pdf'))).toBe(true);
-    expect(written.every((f) => !f.includes('/'))).toBe(true);
+    expect(body.documents[0].filename).not.toContain('..');
   });
 });
 
@@ -726,10 +746,10 @@ describe('POST /analyses/:analysisId/edits', () => {
       expect(body.diagnosis).toBeNull();
       expect(body.error.code).toBe('RateLimited');
 
-      const stored = JSON.parse(
-        await readFile(join(uploadDir(TENANT, ANALYSIS), `edits-${body.batchId}.json`), 'utf8'),
-      );
-      expect(stored.edits).toHaveLength(1);
+      const { rows } = await getPool().query('SELECT 1 FROM correction WHERE analysis_id = $1', [
+        ANALYSIS,
+      ]);
+      expect(rows).toHaveLength(1);
     });
 
     it('answers from the recording in fixture mode', async () => {
@@ -746,16 +766,19 @@ describe('POST /analyses/:analysisId/edits', () => {
    * are the evidence that they share a cause — five values changed by the same
    * factor is one mistake about units, and splitting them loses that.
    */
-  it('writes the corrections as a single batch, with their provenance', async () => {
+  it('records the corrections as one batch, with their provenance', async () => {
     const { body } = await submit({ fundId: 'calpers', edits: [EDIT] });
 
-    const stored = JSON.parse(
-      await readFile(join(uploadDir(TENANT, ANALYSIS), `edits-${body.batchId}.json`), 'utf8'),
+    const { rows } = await getPool().query(
+      'SELECT batch_id, from_value, to_value, context FROM correction WHERE analysis_id = $1',
+      [ANALYSIS],
     );
-    expect(stored.fundId).toBe('calpers');
-    expect(stored.edits).toHaveLength(1);
-    expect(stored.edits[0].context.sourceText).toBe('Total Investments $462,090,073');
-    expect(stored.submittedAt).toEqual(expect.any(String));
+
+    expect(rows).toHaveLength(1);
+    // The batch id ties corrections made together to the one diagnosis of them.
+    expect(rows[0].batch_id).toBe(body.batchId);
+    expect(rows[0].from_value).toBe('462090073000');
+    expect(rows[0].context.sourceText).toBe('Total Investments $462,090,073');
   });
 
   /** The analyst agreeing with us is a normal outcome, not a failure. */
@@ -764,7 +787,10 @@ describe('POST /analyses/:analysisId/edits', () => {
 
     expect(status).toBe(200);
     expect(body).toMatchObject({ batchId: null, received: 0, diagnosis: null });
-    await expect(readdir(uploadDir(TENANT, ANALYSIS))).rejects.toThrow();
+    const { rows } = await getPool().query('SELECT 1 FROM correction WHERE analysis_id = $1', [
+      ANALYSIS,
+    ]);
+    expect(rows).toHaveLength(0);
   });
 
   it('refuses an analysis id that could steer a filesystem path', async () => {

@@ -1,7 +1,8 @@
-import type { Analysis } from '../types';
+import type { AnalysisSummary } from '../api';
 
 type Props = {
-  analyses: Analysis[];
+  analyses: AnalysisSummary[];
+  failure: string | null;
   onOpen: (id: string) => void;
   onNew: () => void;
 };
@@ -13,7 +14,7 @@ function formatDate(iso: string): string {
   });
 }
 
-export default function AnalysisList({ analyses, onOpen, onNew }: Props) {
+export default function AnalysisList({ analyses, failure, onOpen, onNew }: Props) {
   return (
     <div className="page">
       <header className="page-header">
@@ -26,7 +27,16 @@ export default function AnalysisList({ analyses, onOpen, onNew }: Props) {
         </button>
       </header>
 
-      {analyses.length === 0 ? (
+      {/* An empty list because the server is unreachable is a different fact
+          from having no analyses, and the difference matters to whoever is
+          looking at it. */}
+      {failure && (
+        <p className="form-error" role="alert">
+          {failure}
+        </p>
+      )}
+
+      {!failure && analyses.length === 0 ? (
         <div className="empty">
           <p>No analyses yet.</p>
           <p className="subtle">Start one to upload documents and review extracted values.</p>

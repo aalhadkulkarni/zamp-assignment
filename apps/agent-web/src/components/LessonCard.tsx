@@ -1,9 +1,8 @@
 import { useState } from 'react';
-import type { LessonScope, LessonType } from '../api';
-import type { ProposedLesson } from '../types';
+import type { Lesson, LessonScope, LessonType } from '../api';
 
 type Props = {
-  lesson: ProposedLesson;
+  lesson: Lesson;
   onAccept: (id: string) => void;
   onReject: (id: string, comment: string) => void;
 };

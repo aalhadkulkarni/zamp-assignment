@@ -18,6 +18,16 @@ try {
 }
 
 const { buildApp } = await import('./app.js');
+const { migrate } = await import('./db.js');
+
+// Unlike a missing API key, there is no degraded mode here: an analysis is the
+// product, and without somewhere to keep one there is nothing to serve. Failing
+// at boot with the variable named beats failing on the first request.
+if (!process.env.DATABASE_URL) {
+  console.error('DATABASE_URL is not set. agent-api cannot start without a database.');
+  process.exit(1);
+}
+await migrate();
 
 if (process.env.USE_FIXTURES === 'true') {
   // Loud on purpose. A recorded reply is indistinguishable from a real one in

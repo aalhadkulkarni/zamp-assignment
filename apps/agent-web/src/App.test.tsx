@@ -2,32 +2,27 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import {
-  ApiError,
-  WriteRejected,
-  listFunds,
-  uploadDocuments,
-  submitEdits,
-  writeReport,
-  type ReviewField,
-  type UploadResult,
-} from './api';
+import * as api from './api';
+import { ApiError, WriteRejected } from './api';
 import { MAX_FILE_BYTES } from './files';
 
 vi.mock('./api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./api')>()),
-  uploadDocuments: vi.fn(),
   listFunds: vi.fn(),
+  createAnalysis: vi.fn(),
+  listAnalyses: vi.fn(),
+  getAnalysis: vi.fn(),
+  uploadDocuments: vi.fn(),
   writeReport: vi.fn(),
   submitEdits: vi.fn(),
+  decideLesson: vi.fn(),
 }));
 
-const mockUpload = vi.mocked(uploadDocuments);
-const mockListFunds = vi.mocked(listFunds);
-const mockWrite = vi.mocked(writeReport);
-const mockSubmitEdits = vi.mocked(submitEdits);
+const mockListFunds = vi.mocked(api.listFunds);
+const mockUpload = vi.mocked(api.uploadDocuments);
+const mockWrite = vi.mocked(api.writeReport);
+const mockSubmitEdits = vi.mocked(api.submitEdits);
 
-/** Funds come from the customer's system now, so tests have to stand one in. */
 const FUNDS = [
   { id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' },
   { id: 'calstrs', name: 'CalSTRS — California State Teachers’ Retirement System' },
@@ -37,7 +32,7 @@ const FUND_LABEL = FUNDS[0].name;
 const AGENT_TEXT = 'I found four of the five values. Total receivables was not broken out.';
 
 /** Shaped like a real extraction: real figures, thousands, and one genuine blank. */
-const FIELDS: ReviewField[] = [
+const FIELDS: api.ReviewField[] = [
   {
     key: 'total_investments',
     value: 462_090_073_000,
@@ -60,39 +55,117 @@ const FIELDS: ReviewField[] = [
   },
 ];
 
-/** Echoes back what the real endpoint returns for an accepted upload. */
-function accepts(overrides: Partial<UploadResult> = {}) {
-  mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => ({
-    uploadId: 'upload-1',
-    analysisId,
-    prompt,
-    documents: files.map((f, i) => ({
-      id: `doc-${i}`,
-      filename: f.name,
-      storedAs: f.name,
-      size: f.size,
-    })),
-    agent: {
-      model: 'claude-opus-5',
-      summary: AGENT_TEXT,
-      fields: FIELDS,
-      usage: { inputTokens: 24180, outputTokens: 742 },
-      fixture: false,
-    },
-    agentError: null,
-    ...overrides,
-  }));
-}
+/**
+ * A small stand-in for agent-api that honours its contract: an analysis is
+ * server-held, and the browser re-reads it after every change. Asserting
+ * against a coherent fake keeps these tests about the UI while still catching
+ * the case that matters — the client showing something the server never said.
+ */
+const server = {
+  analyses: new Map<string, api.StoredAnalysis>(),
+
+  reset() {
+    server.analyses.clear();
+    server.restoreUpload();
+
+    mockListFunds.mockResolvedValue(FUNDS);
+    vi.mocked(api.listAnalyses).mockImplementation(async () => [...server.analyses.values()]);
+    vi.mocked(api.getAnalysis).mockImplementation(async (id) => {
+      const found = server.analyses.get(id);
+      if (!found) throw new api.ApiError('No such analysis.', 404);
+      return structuredClone(found);
+    });
+    vi.mocked(api.createAnalysis).mockImplementation(async (fundId) => {
+      const analysis: api.StoredAnalysis = {
+        id: crypto.randomUUID(),
+        fundId,
+        fundName: FUNDS.find((f) => f.id === fundId)!.name,
+        status: 'draft',
+        createdAt: new Date().toISOString(),
+        fiscalYearEnd: '',
+        messages: [{ id: 'm0', author: 'agent', text: 'Upload the documents you want analysed.' }],
+        fields: [],
+        lessons: [],
+      };
+      server.analyses.set(analysis.id, analysis);
+      return analysis;
+    });
+
+    mockWrite.mockImplementation(async (analysisId, _fundId, fiscalYearEnd) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.status = 'approved';
+      analysis.fiscalYearEnd = fiscalYearEnd;
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'agent',
+        text: `Written to the customer's system for the period ending ${fiscalYearEnd}. This analysis is now read-only.`,
+      });
+    });
+
+    // No diagnosis by default; a test that wants one calls server.diagnoses().
+    mockSubmitEdits.mockResolvedValue({
+      batchId: 'batch-1',
+      received: 1,
+      diagnosis: null,
+      error: null,
+    });
+
+    vi.mocked(api.decideLesson).mockImplementation(async (analysisId, lessonId, decision, comment) => {
+      const analysis = server.analyses.get(analysisId)!;
+      const lesson = analysis.lessons.find((l) => l.id === lessonId)!;
+      Object.assign(lesson, { decision, comment });
+      return lesson;
+    });
+  },
+
+  restoreUpload() {
+    mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.messages.push(
+        {
+          id: crypto.randomUUID(),
+          author: 'analyst',
+          text: prompt,
+          attachments: files.map((f) => ({ name: f.name, size: f.size })),
+        },
+        { id: crypto.randomUUID(), author: 'agent', text: AGENT_TEXT },
+      );
+      analysis.fields = structuredClone(FIELDS);
+      return {
+        uploadId: 'upload-1',
+        analysisId,
+        prompt,
+        documents: files.map((f, i) => ({ id: `doc-${i}`, filename: f.name, size: f.size })),
+        agent: {
+          model: 'claude-opus-5',
+          summary: AGENT_TEXT,
+          fields: structuredClone(FIELDS),
+          usage: { inputTokens: 24180, outputTokens: 742 },
+          fixture: false,
+        },
+        agentError: null,
+      };
+    });
+  },
+
+  /** Lets a test hand back proposed lessons from the next submit. */
+  diagnoses(diagnosis: api.Diagnosis) {
+    mockSubmitEdits.mockImplementation(async (analysisId) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.lessons = structuredClone(diagnosis.lessons);
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'agent',
+        text: diagnosis.summary,
+      });
+      return { batchId: 'batch-1', received: 1, diagnosis, error: null };
+    });
+  },
+};
 
 beforeEach(() => {
-  mockUpload.mockReset();
-  mockListFunds.mockReset();
-  mockListFunds.mockResolvedValue(FUNDS);
-  mockWrite.mockReset();
-  mockWrite.mockResolvedValue(undefined);
-  mockSubmitEdits.mockReset();
-  mockSubmitEdits.mockResolvedValue({ batchId: 'batch-1', received: 1, diagnosis: null, error: null });
-  accepts();
+  vi.clearAllMocks();
+  server.reset();
 });
 
 function pdf(name: string, bytes = 2048): File {
@@ -243,14 +316,30 @@ describe('sending', () => {
   it('marks a recorded reply so a demo cannot pass it off as a real call', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
-    accepts({
-      agent: {
-        model: 'claude-opus-5',
-        summary: AGENT_TEXT,
-        fields: FIELDS,
-        usage: { inputTokens: 24180, outputTokens: 742 },
+    // The server records that the reply was recorded, and the browser shows it.
+    mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'agent',
+        text: AGENT_TEXT,
         fixture: true,
-      },
+      });
+      analysis.fields = structuredClone(FIELDS);
+      return {
+        uploadId: 'u',
+        analysisId,
+        prompt,
+        documents: files.map((f, i) => ({ id: `d${i}`, filename: f.name, size: f.size })),
+        agent: {
+          model: 'claude-opus-5',
+          summary: AGENT_TEXT,
+          fields: structuredClone(FIELDS),
+          usage: { inputTokens: 24180, outputTokens: 742 },
+          fixture: true,
+        },
+        agentError: null,
+      };
     });
 
     await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
@@ -530,12 +619,7 @@ describe('sending', () => {
       await user.type(screen.getByLabelText('total_investments value'), '462090073');
       await user.tab();
 
-      mockSubmitEdits.mockResolvedValue({
-        batchId: 'batch-1',
-        received: 1,
-        diagnosis: diagnosis as never,
-        error: null,
-      });
+      server.diagnoses(diagnosis as api.Diagnosis);
       await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
       return user;
     }
@@ -622,11 +706,20 @@ describe('sending', () => {
       await user.type(screen.getByLabelText('total_receivables value'), '1');
       await user.tab();
 
-      mockSubmitEdits.mockResolvedValue({
-        batchId: 'batch-1',
-        received: 1,
-        diagnosis: null,
-        error: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+      // Corrections stored, explanation not. The server says so in the log.
+      mockSubmitEdits.mockImplementation(async (analysisId) => {
+        server.analyses.get(analysisId)!.messages.push({
+          id: crypto.randomUUID(),
+          author: 'agent',
+          text: 'Your corrections were recorded, but I could not work out why they were needed. Anthropic is rate limiting us.',
+          variant: 'error',
+        });
+        return {
+          batchId: 'batch-1',
+          received: 1,
+          diagnosis: null,
+          error: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+        };
       });
       await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
 
@@ -840,16 +933,29 @@ describe('sending', () => {
   it('reports a stored upload whose model call failed, without losing the documents', async () => {
     const user = userEvent.setup();
     await startAnalysis(user);
-    accepts({
-      agent: null,
-      agentError: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+    // Documents stored, model unreachable. The server says so in the log.
+    mockUpload.mockImplementation(async (analysisId, _fundId, files, prompt) => {
+      const analysis = server.analyses.get(analysisId)!;
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'agent',
+        text: 'Your documents are stored, but extraction failed. Anthropic is rate limiting us.',
+        variant: 'error',
+      });
+      return {
+        uploadId: 'u',
+        analysisId,
+        prompt,
+        documents: files.map((f, i) => ({ id: `d${i}`, filename: f.name, size: f.size })),
+        agent: null,
+        agentError: { code: 'RateLimited', message: 'Anthropic is rate limiting us.' },
+      };
     });
 
     await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
-    expect(await screen.findByText(/stored, but the assistant could not be reached/)).
-      toBeInTheDocument();
+    expect(await screen.findByText(/documents are stored, but extraction failed/)).toBeInTheDocument();
     expect(screen.getByText(/Anthropic is rate limiting us/)).toBeInTheDocument();
     // Composer still clears — the upload itself succeeded.
     expect(screen.getByLabelText('Additional context')).toHaveValue('');
@@ -983,7 +1089,9 @@ describe('when the upload is refused', () => {
     const user = await sendAgainst(new ApiError('Could not reach the server.', 0));
     await screen.findByText(/Could not reach the server/);
 
-    accepts();
+    // Restore only the upload behaviour — resetting the whole fake would delete
+    // the analysis this test is sitting in.
+    server.restoreUpload();
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText(AGENT_TEXT)).toBeInTheDocument();

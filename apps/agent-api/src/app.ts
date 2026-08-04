@@ -22,7 +22,6 @@ import {
 import {
   isValidAnalysisId,
   readUploadedDocuments,
-  storeEdits,
   storeUpload,
   validateDocument,
   validatePrompt,
@@ -30,6 +29,17 @@ import {
   type IncomingDocument,
   type Rejection,
 } from './documents.js';
+import {
+  appendMessages,
+  createAnalysis,
+  decideLesson,
+  getAnalysis,
+  listAnalyses,
+  markApproved,
+  replaceFields,
+  storeCorrections,
+  storeLessons,
+} from './analyses.js';
 import { diagnosisSchema, type Diagnosis } from './diagnosis.js';
 import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
 import { diagnosisPrompt, extractionPrompt } from './prompts.js';
@@ -109,6 +119,71 @@ export async function buildApp() {
   });
 
   /**
+   * An analysis is now the server's, not the browser's. Before this it lived in
+   * React state and a refresh destroyed it — including the corrections and the
+   * lessons, which are the only things here worth keeping.
+   */
+  app.post<{ Body: { fundId?: string } }>('/analyses', async (request, reply) => {
+    const fundId = request.body?.fundId;
+    if (!fundId) {
+      return reply.code(400).send({ error: 'InvalidRequest', message: 'fundId is required.' });
+    }
+
+    try {
+      // The name is the customer's fact, looked up rather than taken from the
+      // browser, so an analysis cannot be labelled with a fund that isn't theirs.
+      const fund = (await listFunds()).find((f) => f.id === fundId);
+      if (!fund) {
+        return reply.code(404).send({ error: 'UnknownFund', message: `No fund '${fundId}'.` });
+      }
+      return reply.code(201).send(await createAnalysis(resolveTenant(request), fundId, fund.name));
+    } catch (error) {
+      if (error instanceof CustomerSystemError) {
+        return reply.code(502).send({ error: 'CustomerSystemUnavailable', message: error.message });
+      }
+      throw error;
+    }
+  });
+
+  app.get('/analyses', async (request) => listAnalyses(resolveTenant(request)));
+
+  app.get<{ Params: { analysisId: string } }>('/analyses/:analysisId', async (request, reply) => {
+    const analysis = await getAnalysis(resolveTenant(request), request.params.analysisId);
+    if (!analysis) {
+      return reply.code(404).send({ error: 'UnknownAnalysis', message: 'No such analysis.' });
+    }
+    return analysis;
+  });
+
+  /**
+   * Nothing becomes a rule without this. Recorded against the one lesson it
+   * refers to, so accepting a proposal says nothing about the others alongside
+   * it — the analyst is ratifying each diagnosis on its own terms.
+   */
+  app.post<{
+    Params: { analysisId: string; lessonId: string };
+    Body: { decision?: 'accepted' | 'rejected'; comment?: string };
+  }>('/analyses/:analysisId/lessons/:lessonId', async (request, reply) => {
+    const { decision, comment } = request.body ?? {};
+    if (decision !== 'accepted' && decision !== 'rejected') {
+      return reply
+        .code(400)
+        .send({ error: 'InvalidRequest', message: "decision must be 'accepted' or 'rejected'." });
+    }
+
+    const lesson = await decideLesson(
+      resolveTenant(request),
+      request.params.lessonId,
+      decision,
+      comment?.trim() || null,
+    );
+    if (!lesson) {
+      return reply.code(404).send({ error: 'UnknownLesson', message: 'No such lesson.' });
+    }
+    return lesson;
+  });
+
+  /**
    * The write. Values arrive as the text the analyst saw, and are coerced here
    * against the customer's own field definitions — but only where the coercion
    * is unambiguous. Anything that does not convert is forwarded untouched so
@@ -131,7 +206,20 @@ export async function buildApp() {
       const definitions = await listFieldDefinitions();
       const result = await createReport(fundId, fiscalYearEnd, coerce(values, definitions));
 
-      if (result.ok) return reply.code(201).send(result.report);
+      if (result.ok) {
+        // Their database owns these values now, so ours records that and stops
+        // offering to change them.
+        await markApproved(request.params.analysisId, fiscalYearEnd);
+        await appendMessages(request.params.analysisId, [
+          {
+            author: 'agent',
+            text:
+              `Written to the customer's system for the period ending ${fiscalYearEnd}. ` +
+              'This analysis is now read-only.',
+          },
+        ]);
+        return reply.code(201).send(result.report);
+      }
 
       request.log.info({ rejection: result }, 'customer system refused the write');
       return reply.code(result.status).send({
@@ -182,7 +270,9 @@ export async function buildApp() {
       return reply.code(200).send({ batchId: null, received: 0, diagnosis: null, error: null });
     }
 
-    const batchId = await storeEdits(resolveTenant(request), analysisId, fundId, edits);
+    const tenantId = resolveTenant(request);
+    const batchId = crypto.randomUUID();
+    await storeCorrections(analysisId, batchId, edits);
 
     // The corrections are recorded whatever happens next. A failed diagnosis
     // must not lose them — they are the raw material, and the explanation can
@@ -197,7 +287,7 @@ export async function buildApp() {
       // The pages the analyst was looking at. Without them the model can only
       // diagnose units errors and slips — the other three lesson types are
       // about what else was on the page.
-      const pages = await readUploadedDocuments(resolveTenant(request), analysisId);
+      const pages = await readUploadedDocuments(analysisId);
 
       const run = usingFixtures() ? diagnoseFixture : diagnose;
       const result = await run(
@@ -220,12 +310,12 @@ export async function buildApp() {
       // Ids are assigned here, not asked of the model. A model inventing
       // identifiers is a way to get collisions and dangling references for no
       // benefit — and an accept has to name exactly one lesson.
+      // Persisted as they are proposed, undecided. A lesson nobody ever ruled
+      // on is still worth having — it says the agent noticed something, and the
+      // analyst can come back to it.
       diagnosis = {
         summary: result.diagnosis.summary,
-        lessons: result.diagnosis.lessons.map((lesson) => ({
-          ...lesson,
-          id: crypto.randomUUID(),
-        })),
+        lessons: await storeLessons(tenantId, analysisId, batchId, fundId, result.diagnosis.lessons),
       };
     } catch (thrown) {
       error = describeFailure(thrown) ?? {
@@ -234,6 +324,19 @@ export async function buildApp() {
       };
       request.log.warn({ err: thrown }, 'diagnosis failed after storing the corrections');
     }
+
+    // The explanation belongs in the conversation, not just in a response body.
+    // It is something the agent said, and it has to survive a refresh like
+    // everything else it said.
+    await appendMessages(analysisId, [
+      diagnosis
+        ? { author: 'agent', text: diagnosis.summary }
+        : {
+            author: 'agent',
+            text: `Your corrections were recorded, but I could not work out why they were needed. ${error?.message ?? ''}`.trim(),
+            variant: 'error' as const,
+          },
+    ]);
 
     return reply.code(201).send({ batchId, received: edits.length, diagnosis, error });
   });
@@ -327,8 +430,7 @@ export async function buildApp() {
         });
       }
 
-      const tenantId = resolveTenant(request);
-      const { uploadId, stored } = await storeUpload(tenantId, analysisId, documents, prompt);
+      const { uploadId, stored } = await storeUpload(analysisId, documents, prompt);
 
       // The documents are on disk by this point, so a model failure must not be
       // reported as a failed upload — the analyst would re-send files we already
@@ -373,6 +475,25 @@ export async function buildApp() {
         if (!agentError) throw error;
         request.log.warn({ err: error }, 'extraction failed after storing documents');
       }
+
+      // The conversation and the values are the analysis. Held only in the
+      // browser they died on refresh, which made "resume a draft" a promise the
+      // code did not keep.
+      await appendMessages(analysisId, [
+        {
+          author: 'analyst',
+          text: prompt,
+          attachments: stored.map((d) => ({ name: d.filename, size: d.size })),
+        },
+        agent
+          ? { author: 'agent', text: agent.summary, fixture: agent.fixture }
+          : {
+              author: 'agent',
+              text: `Your documents are stored, but extraction failed. ${agentError?.message ?? ''}`.trim(),
+              variant: 'error' as const,
+            },
+      ]);
+      if (agent) await replaceFields(analysisId, agent.fields);
 
       return reply
         .code(200)

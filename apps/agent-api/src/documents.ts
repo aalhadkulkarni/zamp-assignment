@@ -1,11 +1,6 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
-import {
-  ACCEPTED_EXTENSIONS,
-  MAX_FILE_BYTES,
-  MAX_PROMPT_LENGTH,
-  dataDir,
-} from './config.js';
+import { extname } from 'node:path';
+import { getPool } from './db.js';
+import { ACCEPTED_EXTENSIONS, MAX_FILE_BYTES, MAX_PROMPT_LENGTH } from './config.js';
 
 export type IncomingDocument = {
   filename: string;
@@ -14,10 +9,8 @@ export type IncomingDocument = {
 
 export type StoredDocument = {
   id: string;
-  /** As the analyst named it. What we show them and what the model is told. */
+  /** As the analyst named it. There is no second name any more — see below. */
   filename: string;
-  /** Sanitised. Only ever used to build a path on disk. */
-  storedAs: string;
   size: number;
 };
 
@@ -35,14 +28,6 @@ export function isValidAnalysisId(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
 }
 
-/**
- * The filename is only ever a label — the bytes are written under a generated
- * id. Stripping the directory part means a name like ../../etc/passwd cannot
- * point the write anywhere, whatever else goes wrong downstream.
- */
-export function safeFilename(filename: string): string {
-  return basename(filename).replace(/[^\w.\- ]/g, '_').slice(0, 200);
-}
 
 export function validateDocument(doc: IncomingDocument): Rejection | null {
   const extension = extname(doc.filename).toLowerCase();
@@ -69,43 +54,6 @@ export function validatePrompt(prompt: string): string | null {
   return null;
 }
 
-export function uploadDir(tenantId: string, analysisId: string): string {
-  return join(dataDir(), tenantId, analysisId);
-}
-
-/**
- * Writes every document, then a manifest describing the upload. The manifest is
- * written last so a directory containing one is known to be complete — a crash
- * midway leaves loose files and no manifest, which is a state we can recognise.
- */
-export async function storeUpload(
-  tenantId: string,
-  analysisId: string,
-  documents: IncomingDocument[],
-  prompt: string,
-): Promise<{ uploadId: string; stored: StoredDocument[] }> {
-  const uploadId = crypto.randomUUID();
-  const dir = uploadDir(tenantId, analysisId);
-  await mkdir(dir, { recursive: true });
-
-  const stored: StoredDocument[] = [];
-  for (const doc of documents) {
-    const id = crypto.randomUUID();
-    // Sanitising is about where the bytes land, not about what the analyst is
-    // allowed to call their file. Showing them a name they did not choose makes
-    // it look like we mangled their document.
-    const storedAs = safeFilename(doc.filename);
-    await writeFile(join(dir, `${id}-${storedAs}`), doc.bytes);
-    stored.push({ id, filename: doc.filename, storedAs, size: doc.bytes.length });
-  }
-
-  await writeFile(
-    join(dir, `upload-${uploadId}.json`),
-    JSON.stringify({ uploadId, tenantId, analysisId, prompt, documents: stored, receivedAt: new Date().toISOString() }, null, 2),
-  );
-
-  return { uploadId, stored };
-}
 
 /**
  * One correction the analyst made, with the provenance of the value they
@@ -125,76 +73,77 @@ export type EditEvent = {
   };
 };
 
+
 /**
- * Corrections are stored as one batch, not one file per field. They arrive
- * together because they were made together, and that grouping is the signal:
- * five fields corrected by the same factor is one mistake about units, and
- * splitting them across files would throw away the only evidence of that.
+ * The pages, stored as bytes in the row rather than as a path to a file.
+ *
+ * On disk they did not survive a deploy — Render's filesystem is wiped on every
+ * restart — and the diagnosis reads them back to see what else was on the page.
+ * Losing them there costs three of the five lesson types, silently, in
+ * production only. Bytes in the database is the smallest thing that fixes that.
+ *
+ * At our sizes this is comfortable: a cut of ten pages is around 1.2MB and an
+ * upload is capped at ten files, so worst case is roughly 12MB against a free
+ * tier of half a gigabyte. It stops being the right answer somewhere around
+ * whole ACFRs at scale, and at that point the bytes move to object storage and
+ * the row keeps a key — which is a change to this function and nothing else.
  */
-export async function storeEdits(
-  tenantId: string,
+export async function storeUpload(
   analysisId: string,
-  fundId: string,
-  edits: EditEvent[],
-): Promise<string> {
-  const batchId = crypto.randomUUID();
-  const dir = uploadDir(tenantId, analysisId);
-  await mkdir(dir, { recursive: true });
+  documents: IncomingDocument[],
+  _prompt: string,
+): Promise<{ uploadId: string; stored: StoredDocument[] }> {
+  const pool = getPool();
+  const uploadId = crypto.randomUUID();
+  const stored: StoredDocument[] = [];
 
-  await writeFile(
-    join(dir, `edits-${batchId}.json`),
-    JSON.stringify(
-      { batchId, tenantId, analysisId, fundId, edits, submittedAt: new Date().toISOString() },
-      null,
-      2,
-    ),
-  );
+  for (const doc of documents) {
+    const { rows } = await pool.query(
+      `INSERT INTO document (id, analysis_id, upload_id, filename, extension, size_bytes, bytes)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [
+        analysisId,
+        uploadId,
+        // The analyst's name, unchanged. Sanitising it was about stopping a
+        // filename steering a write out of its directory. The bytes go in a
+        // column now, so there is no path to steer and nothing to protect
+        // against — keeping the mangling would only mean showing people a name
+        // they did not choose.
+        doc.filename,
+        extname(doc.filename).toLowerCase(),
+        doc.bytes.length,
+        doc.bytes,
+      ],
+    );
+    stored.push({ id: rows[0].id, filename: doc.filename, size: doc.bytes.length });
+  }
 
-  return batchId;
+  return { uploadId, stored };
 }
 
 /**
- * The documents from the most recent upload for an analysis, read back off disk.
+ * The documents from the most recent upload, for the diagnosis to look at.
  *
- * Needed because a diagnosis has to see the page. Three of the five lesson types
- * — wrong source, concept confusion, unrecognised label — are about what else
- * was on that page, and the quoted line by definition does not contain it.
- *
- * Returns nothing if the upload directory is gone, which on Render's ephemeral
- * filesystem is a normal Tuesday. A diagnosis without the page is worse than one
- * with it, but far better than a failure.
+ * Returns nothing when there are none, which is no longer the routine case it
+ * was on disk — but a diagnosis without the page is still better than a failure.
  */
 export async function readUploadedDocuments(
-  tenantId: string,
   analysisId: string,
-): Promise<{ filename: string; bytes: Buffer }[]> {
-  const dir = uploadDir(tenantId, analysisId);
-
-  let entries: string[];
-  try {
-    entries = await readdir(dir);
-  } catch {
-    return [];
-  }
-
-  const manifests = entries.filter((name) => name.startsWith('upload-')).sort();
-  const latest = manifests.at(-1);
-  if (!latest) return [];
-
-  const manifest = JSON.parse(await readFile(join(dir, latest), 'utf8')) as {
-    documents: StoredDocument[];
-  };
-
-  const documents = [];
-  for (const doc of manifest.documents) {
-    try {
-      documents.push({
-        filename: doc.filename,
-        bytes: await readFile(join(dir, `${doc.id}-${doc.storedAs}`)),
-      });
-    } catch {
-      // One unreadable file should not cost us the others.
-    }
-  }
-  return documents;
+): Promise<{ filename: string; extension: string; bytes: Buffer }[]> {
+  const { rows } = await getPool().query(
+    `SELECT filename, extension, bytes FROM document
+      WHERE analysis_id = $1
+        AND upload_id = (
+          SELECT upload_id FROM document WHERE analysis_id = $1
+           ORDER BY created_at DESC LIMIT 1
+        )
+      ORDER BY created_at`,
+    [analysisId],
+  );
+  return rows.map((row) => ({
+    filename: row.filename,
+    extension: row.extension,
+    bytes: row.bytes,
+  }));
 }

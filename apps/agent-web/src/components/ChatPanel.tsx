@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { formatBytes } from '../files';
-import type { ChatMessage } from '../types';
+import type { StoredMessage } from '../api';
 
 type Props = {
-  messages: ChatMessage[];
+  messages: StoredMessage[];
 };
 
 export default function ChatPanel({ messages }: Props) {

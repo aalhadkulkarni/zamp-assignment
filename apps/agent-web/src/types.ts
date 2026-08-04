@@ -1,5 +1,3 @@
-import type { Lesson, ReviewField } from './api';
-
 export type Fund = {
   id: string;
   name: string;
@@ -41,69 +39,4 @@ export type EditEvent = {
   };
 };
 
-/** A proposed lesson, plus what the analyst decided about it. */
-export type ProposedLesson = Lesson & {
-  decision?: 'accepted' | 'rejected';
-  /** Why the analyst disagreed. Attached to the lesson it refutes, never loose. */
-  comment?: string;
-};
 
-export type ChatMessage = {
-  id: string;
-  author: 'agent' | 'analyst';
-  text: string;
-  attachments?: { name: string; size: number }[];
-  /** Failures are shown in the log rather than swallowed into an alert. */
-  variant?: 'error';
-  /** Marks a reply that came from a recording, so a demo cannot mislead. */
-  fixture?: boolean;
-};
-
-export type Analysis = {
-  id: string;
-  fundId: string;
-  fundName: string;
-  createdAt: string;
-  /**
-   * Approved analyses are read-only: they have been written to customer-system
-   * and that database is the source of truth. Nothing sets this yet.
-   */
-  status: 'draft' | 'approved';
-  messages: ChatMessage[];
-  /** Empty until an extraction comes back. Replaced wholesale by the latest one. */
-  fields: ReviewField[];
-  /**
-   * Analyst corrections, keyed by field, held as the raw text they typed.
-   *
-   * Text rather than a parsed value because a field is not necessarily money —
-   * the customer's schema decides that, and a control that assumes a number
-   * breaks the day one of these is a date or a flag. Coercion happens against
-   * the field definition on the way out, and the customer's API is the
-   * authority on whether it was right.
-   *
-   * Kept apart from `fields` rather than merged into them: what the model said
-   * and what the analyst said are both needed to work out why an edit happened,
-   * and merging destroys the first.
-   */
-  edits: Record<string, string>;
-  /**
-   * What the analyst actually changed, in the order they changed it. Distinct
-   * from `edits`: that is the current state of the table, this is the record of
-   * what happened, and step 10 diagnoses the second not the first.
-   */
-  editEvents: EditEvent[];
-  /**
-   * Lessons the agent proposed after the corrections were submitted, with the
-   * analyst's decision on each. Nothing here is durable — a lesson only becomes
-   * a rule once it is accepted, which is step 11.
-   */
-  lessons: ProposedLesson[];
-  /** The reporting period the values belong to. The analyst supplies it. */
-  fiscalYearEnd: string;
-  /**
-   * Per-field rejections from the customer's last write attempt, keyed by
-   * field. Cleared when the analyst changes anything, because a complaint about
-   * a value they have since edited is worse than no complaint.
-   */
-  writeProblems: Record<string, string>;
-};

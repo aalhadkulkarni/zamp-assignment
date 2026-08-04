@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_FILE_BYTES } from './config.js';
-import { isValidAnalysisId, safeFilename, validateDocument } from './documents.js';
+import { isValidAnalysisId, validateDocument } from './documents.js';
 
 const doc = (filename: string, size = 64) => ({
   filename,
@@ -16,25 +16,6 @@ describe('isValidAnalysisId', () => {
     for (const id of ['..', '../../etc', 'a/b', '', 'not-a-uuid']) {
       expect(isValidAnalysisId(id)).toBe(false);
     }
-  });
-});
-
-describe('safeFilename', () => {
-  it('drops the directory part so a name cannot escape the upload folder', () => {
-    expect(safeFilename('../../etc/passwd')).toBe('passwd');
-    expect(safeFilename('/absolute/path/report.pdf')).toBe('report.pdf');
-  });
-
-  it('replaces characters that have meaning to a shell or a path', () => {
-    expect(safeFilename('re;port$(x).pdf')).toBe('re_port__x_.pdf');
-  });
-
-  it('keeps ordinary names intact', () => {
-    expect(safeFilename('calstrs acfr-2023.pdf')).toBe('calstrs acfr-2023.pdf');
-  });
-
-  it('caps the length', () => {
-    expect(safeFilename(`${'a'.repeat(500)}.pdf`)).toHaveLength(200);
   });
 });
 

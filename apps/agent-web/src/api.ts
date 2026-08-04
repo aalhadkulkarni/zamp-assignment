@@ -25,6 +25,75 @@ export async function listFunds(): Promise<Fund[]> {
   return response.json();
 }
 
+async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${AGENT_API}${path}`, init);
+  } catch {
+    throw new ApiError('Could not reach the server. Check your connection.', 0);
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new ApiError(body?.message ?? `Request failed (${response.status}).`, response.status);
+  }
+  return response.json();
+}
+
+export type AnalysisSummary = {
+  id: string;
+  fundId: string;
+  fundName: string;
+  status: 'draft' | 'approved';
+  createdAt: string;
+};
+
+export type StoredMessage = {
+  id: string;
+  author: 'agent' | 'analyst';
+  text: string;
+  variant?: 'error';
+  fixture?: boolean;
+  attachments?: { name: string; size: number }[];
+};
+
+/** The whole analysis as the server holds it. The browser renders this rather
+ *  than accumulating its own copy, so a refresh costs nothing. */
+export type StoredAnalysis = AnalysisSummary & {
+  fiscalYearEnd: string;
+  messages: StoredMessage[];
+  fields: ReviewField[];
+  lessons: Lesson[];
+};
+
+export function createAnalysis(fundId: string): Promise<AnalysisSummary> {
+  return json<AnalysisSummary>('/analyses', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ fundId }),
+  });
+}
+
+export function listAnalyses(): Promise<AnalysisSummary[]> {
+  return json<AnalysisSummary[]>('/analyses');
+}
+
+export function getAnalysis(analysisId: string): Promise<StoredAnalysis> {
+  return json<StoredAnalysis>(`/analyses/${analysisId}`);
+}
+
+export function decideLesson(
+  analysisId: string,
+  lessonId: string,
+  decision: 'accepted' | 'rejected',
+  comment?: string,
+): Promise<Lesson> {
+  return json<Lesson>(`/analyses/${analysisId}/lessons/${lessonId}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ decision, comment }),
+  });
+}
+
 export type WriteProblem = { field: string; reason: string };
 
 /**
@@ -101,6 +170,8 @@ export type Lesson = {
   explanation: string;
   rule: string;
   confidence: 'high' | 'medium' | 'low';
+  decision?: 'accepted' | 'rejected';
+  comment?: string;
 };
 
 export type Diagnosis = {
@@ -147,10 +218,7 @@ export async function submitEdits(
 
 export type UploadedDocument = {
   id: string;
-  /** As the analyst named it. */
   filename: string;
-  /** Sanitised name on the server's disk. Not shown to the analyst. */
-  storedAs: string;
   size: number;
 };
 
