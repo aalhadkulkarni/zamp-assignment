@@ -51,19 +51,82 @@ Start with [`apps/agent-api/src/lessons.ts`](apps/agent-api/src/lessons.ts).
 
 ## Running it
 
-Node 22 (`.nvmrc`). No database, no API key, nothing to provision:
+### What you need
+
+**Node 22.12 or newer**, and nothing else. No Docker, no Postgres, no API key, no
+account anywhere.
+
+The version is pinned in [`.nvmrc`](.nvmrc), so with
+[nvm](https://github.com/nvm-sh/nvm):
 
 ```bash
-npm install
-npm run dev
+nvm use          # or: nvm install
+node --version   # v22.x
 ```
 
-Open http://localhost:5173.
+npm ships with Node and is the only package manager used here — the lockfile is
+npm's and the workspaces are npm workspaces, so yarn or pnpm will not reproduce
+this install.
 
-That gets you the whole product on recorded model replies and an in-memory
-Postgres — the real schema and the real SQL, kept nowhere. It says so loudly at
-startup. Enough to click through upload → review → correct → write → diagnose →
-ratify, and to see a second document benefit from a lesson learned on the first.
+### Start it
+
+```bash
+npm install      # installs all three apps; npm workspaces, so one command
+npm run dev      # starts all three together
+```
+
+| | |
+|---|---|
+| http://localhost:5173 | the review surface — **open this** |
+| http://localhost:3001 | agent-api |
+| http://localhost:3002 | customer-system |
+
+`npm run dev` runs the three in one terminal with prefixed, colour-coded output.
+Ctrl-C stops all of them. If a port is busy, nothing else in this project is
+using it — check for an earlier run that did not exit.
+
+That first run gives you the whole product with two substitutions, both announced
+at startup:
+
+```
+DATABASE_URL is not set — running against an in-memory database.
+  Everything works, and nothing survives a restart.
+No ANTHROPIC_API_KEY — using recorded replies. Set one to make real calls.
+```
+
+It is enough to click through the entire loop: upload → review → correct → write
+→ diagnose → ratify → watch a second document benefit from what was learned on
+the first.
+
+### Fixture mode
+
+`USE_FIXTURES=true` returns a recorded reply instead of calling Anthropic, so
+development and the test suite cost nothing and need no key.
+
+It is not a stub that returns a fixed blob. **The recordings read their own
+inputs**: the recorded extraction checks whether a ratified synonym reached the
+field's schema description, and the recorded diagnosis parses the actual
+corrections out of the prompt and proposes one lesson per corrected field. So a
+second document improves because the lesson genuinely arrived, not because a
+fixture was told to pretend — which is what makes the demo worth watching, and
+what the tests assert.
+
+A recorded reply is indistinguishable from a real one on screen, so three things
+guard it:
+
+- **off unless asked for** — the check is `USE_FIXTURES === 'true'`, an exact
+  string, so `1` or `yes` or `TRUE` all leave it off
+- **it announces itself at startup**, in the line above
+- **every recorded message is tagged `recorded` in the UI**, so a demo cannot
+  pass one off as a real call
+
+The automatic fallback only happens when there is no API key **and**
+`NODE_ENV !== 'production'`. A deployed service that lost its key fails loudly
+instead of quietly serving recordings.
+
+`FIXTURE_DELAY_MS` (default 1000) is how long a recording waits before answering.
+A recording that returns instantly hides every loading state, so they never get
+built. The test suite sets it to 0.
 
 ### With real model calls
 
@@ -71,8 +134,20 @@ ratify, and to see a second document benefit from a lesson learned on the first.
 cp apps/agent-api/.env.example apps/agent-api/.env
 ```
 
-Then set `ANTHROPIC_API_KEY` and `USE_FIXTURES=false`. Add a `DATABASE_URL`
-pointing at any Postgres if you want analyses to survive a restart.
+Then edit `apps/agent-api/.env`:
+
+| | |
+|---|---|
+| `ANTHROPIC_API_KEY` | from https://console.anthropic.com/settings/keys. The API bills separately from a Claude subscription — it needs credit on the account. |
+| `USE_FIXTURES` | set to `false` |
+| `DATABASE_URL` | optional. Any Postgres. Without it everything works and nothing survives a restart. |
+
+The key lives only in `agent-api` and is never sent to the browser. Nothing
+prefixed `VITE_` may ever hold a secret — Vite compiles those into the served
+bundle.
+
+`.env` is gitignored. `apps/agent-web/.env.local` overrides the API URLs if you
+run the services somewhere other than the default ports.
 
 ### Tests
 
