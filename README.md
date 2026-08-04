@@ -15,6 +15,40 @@ internal tool. That data is later queried by customers. This replaces the typing
 
 ---
 
+## Deployed
+
+| | |
+|---|---|
+| Review surface | https://zamp-assignment-agent-web.vercel.app/ |
+| Agent API | https://zamp-agent-api.onrender.com |
+| Customer system | https://zamp-customer-system.onrender.com |
+
+**The first request may take up to a minute.** Both backends are on Render's free
+tier, which stops an instance after fifteen minutes of inactivity and starts it
+again on the next request. That is the hosting, not the application — once warm
+it answers in well under a second.
+
+If you would rather not wait inside the app, wake them both first — they sleep
+independently, and each health check only speaks for its own service:
+
+- https://zamp-agent-api.onrender.com/health
+- https://zamp-customer-system.onrender.com/health
+
+Both should return `{"ok":true}`. The page will be responsive by the time you
+get to it.
+
+(These checks are deliberately shallow. A service's health endpoint should
+report whether *it* is running, not whether everything it depends on is —
+otherwise a sleeping dependency makes a healthy service look broken, and the
+platform restarts something that was working.)
+
+Extraction itself takes thirty to sixty seconds, and that one *is* the
+application — it is a model reading your documents. The upload returns
+immediately and the result arrives over an event stream, so the page tells you
+what it is doing rather than freezing.
+
+---
+
 ## The part worth reading the code for
 
 **Learning from corrections.** When an analyst changes a value, the edit says
@@ -174,40 +208,6 @@ The valuable ones are fixture-based and live in
 definitions, extraction produces this value with this provenance; given this
 edit, diagnosis produces a lesson of this type and scope; given this lesson, a
 later extraction produces a different result.
-
----
-
-## Deployed
-
-| | |
-|---|---|
-| Review surface | https://zamp-assignment-agent-web.vercel.app/ |
-| Agent API | https://zamp-agent-api.onrender.com |
-| Customer system | https://zamp-customer-system.onrender.com |
-
-**The first request may take up to a minute.** Both backends are on Render's free
-tier, which stops an instance after fifteen minutes of inactivity and starts it
-again on the next request. That is the hosting, not the application — once warm
-it answers in well under a second.
-
-If you would rather not wait inside the app, wake them both first — they sleep
-independently, and each health check only speaks for its own service:
-
-- https://zamp-agent-api.onrender.com/health
-- https://zamp-customer-system.onrender.com/health
-
-Both should return `{"ok":true}`. The page will be responsive by the time you
-get to it.
-
-(These checks are deliberately shallow. A service's health endpoint should
-report whether *it* is running, not whether everything it depends on is —
-otherwise a sleeping dependency makes a healthy service look broken, and the
-platform restarts something that was working.)
-
-Extraction itself takes thirty to sixty seconds, and that one *is* the
-application — it is a model reading your documents. The upload returns
-immediately and the result arrives over an event stream, so the page tells you
-what it is doing rather than freezing.
 
 ---
 
