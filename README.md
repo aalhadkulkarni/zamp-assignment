@@ -152,9 +152,21 @@ run the services somewhere other than the default ports.
 ### Tests
 
 ```bash
-npm test        # 229 unit and integration tests
-npm run typecheck
-npm run e2e     # Playwright, needs the dev servers running
+npm run verify
+```
+
+Typecheck, then 242 unit and integration tests, then Playwright — in the order
+that fails fastest. It starts and stops its own servers and forces an empty
+`DATABASE_URL` and API key, so it uses the in-memory database and recorded
+replies: no database is touched and no model is called. About thirty seconds,
+and safe to run repeatedly.
+
+The pieces separately, if you want them:
+
+```bash
+npm run typecheck   # types, including the test files
+npm test            # unit and integration
+npm run e2e         # Playwright, starts its own servers
 ```
 
 The valuable ones are fixture-based and live in
