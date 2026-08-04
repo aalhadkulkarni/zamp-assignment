@@ -353,6 +353,16 @@ export function watchAnalysis(analysisId: string, onChange: () => void): () => v
   const source = new EventSource(`${AGENT_API}/analyses/${analysisId}/events`);
   source.addEventListener('changed', () => onChange());
 
+  // Also on connect — and `open` fires again on every reconnect, which is the
+  // point. An event published while the stream was down is gone: nothing
+  // replays it, so a client that only listened for `changed` would wait for a
+  // notification that had already been and passed. That is a spinner turning
+  // forever over work that finished a minute ago, and it happened.
+  //
+  // Re-reading when there was nothing to re-read costs one request and is
+  // idempotent, which is a good trade against never finding out.
+  source.addEventListener('open', () => onChange());
+
   // Deliberately no error handler that closes the stream: the default behaviour
   // is to retry, and closing on the first blip is how a page ends up silently
   // never updating again.

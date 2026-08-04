@@ -261,10 +261,17 @@ Corporate proxies, some VPNs, and buffering intermediaries break event streams.
 There is no polling fallback, so the page waits on a spinner indefinitely with no
 timeout and no message.
 
-### 6.2 Tab backgrounded or laptop asleep · **partial**
-`EventSource` reconnects, and the client re-reads the analysis on the next event
-— but a change that happened *while* disconnected fires no event on reconnect.
-The client should re-read on reconnect regardless.
+### 6.2 Tab backgrounded, laptop asleep, or the server restarted · **handled**
+`EventSource` reconnects on its own, but a change published while the stream was
+down is gone — nothing replays it, so a client listening only for `changed`
+waits for a notification that has already been and passed.
+
+This was listed as *partial* and then happened during the first real-API test: a
+five-field extraction completed, the database had it, and the browser sat on
+"Reading your documents…" indefinitely. The client now re-reads whenever the
+stream opens, and `open` fires again on every reconnect. Re-reading when nothing
+changed costs one idempotent request, which is a good trade against never
+finding out.
 
 ### 6.3 Extraction finishes while the analyst is elsewhere · **open**
 The watcher is torn down on leaving the workspace, and the analysis list shows no

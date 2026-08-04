@@ -473,3 +473,16 @@ The recorded reply always answers cannot_tell, which is the honest answer for so
 The filename is still sent to the model as the document's title, because that is ordinary metadata and a real system would send it. That means a misleadingly named file can influence the model's judgement - which is the model weighing evidence, not a rule of ours, and is the right place for it.
 
 What is not built: overruling is a sentence in the chat that nothing acts on. Sending the same documents again produces the same refusal. The honest version is a "read them anyway" the analyst can click, and it is listed rather than built.
+
+
+33 - The client re-reads when the stream opens, not only when it is told to.
+
+Found in the first real test against the API, which is the only reason it was found at all.
+
+An extraction completed. The database had all five values and the analysis was marked idle. The browser sat on "Reading your documents" indefinitely, and would have done so forever.
+
+Everything worked except the last step. The notification was published, and both running instances were holding a live LISTEN connection - I checked pg_stat_activity rather than guessing. What failed is that the browser's event stream had dropped and reconnected at some point, and a notification published during that gap is simply gone. Nothing replays it. The client was listening for `changed` and only `changed`, so it was waiting on a message that had already been sent and missed.
+
+The fix is that the client re-reads whenever the stream opens. EventSource fires `open` again on every reconnect, so a dropped connection now ends with the client asking what it missed rather than assuming it missed nothing. Re-reading when nothing changed costs one request and is idempotent.
+
+Worth recording that this was already written down. It was in EdgeCases as 6.2, marked partial, with the words "the client should re-read on reconnect regardless" - and I left it, because it looked like a rare case. It took one real test to hit it. The lesson is not about SSE: a known gap that produces an infinite spinner is not a rare case worth deferring, because the failure mode is indistinguishable from the product being broken.

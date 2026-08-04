@@ -1817,3 +1817,45 @@ describe('a shared cause across corrections', () => {
     expect(screen.queryByText(/Looks like the same cause/)).not.toBeInTheDocument();
   });
 });
+
+/**
+ * A change published while the event stream was down is gone — nothing replays
+ * it. So the client re-reads whenever the stream opens, not only when it is told
+ * something changed. Without this, one dropped connection at the wrong moment
+ * leaves a spinner turning over work that finished a minute ago. It happened.
+ */
+describe('when the event stream drops and comes back', () => {
+  it('re-reads the analysis on reconnect, not only on a change event', async () => {
+    // A stand-in for EventSource that lets the test fire lifecycle events.
+    const listeners = new Map<string, () => void>();
+    vi.mocked(api.watchAnalysis).mockImplementation((analysisId, onChange) => {
+      server.watchers.set(analysisId, onChange);
+      listeners.set('open', onChange);
+      return () => server.watchers.delete(analysisId);
+    });
+
+    const user = userEvent.setup();
+    server.holdExtraction();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByText(/Reading your documents/);
+
+    // The extraction lands while the browser is not listening: the server
+    // records it, and the notification goes nowhere.
+    const id = server.soleAnalysisId();
+    const analysis = server.analyses.get(id)!;
+    analysis.messages.push({ id: 'm-late', author: 'agent', text: AGENT_TEXT });
+    analysis.fields = structuredClone(FIELDS);
+    analysis.extraction = { state: 'idle', error: null };
+
+    // Still showing the old state, because nothing told it otherwise.
+    expect(screen.getByText(/Reading your documents/)).toBeInTheDocument();
+
+    // The stream comes back. No 'changed' will ever arrive for what was missed.
+    listeners.get('open')!();
+
+    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(screen.queryByText(/Reading your documents/)).not.toBeInTheDocument();
+  });
+});
