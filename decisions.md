@@ -3,6 +3,19 @@ A running log of the calls made while building this, in the order they were made
 For what is deliberately **not** built and why, see [NotBuilt.md](NotBuilt.md).
 For how it behaves when something goes wrong, see [EdgeCases.md](EdgeCases.md).
 
+## How this was written
+
+I built this with Claude Code, and these entries were written by it as the work happened rather than reconstructed at the end. That will be obvious from the prose, so it is better stated than noticed.
+
+What it does not mean is that the decisions are the model's. Most of what is here was argued out, and a fair number of entries record a proposal of its that I rejected or that turned out to be wrong:
+
+- **21** — it built the diagnosis without attaching the document pages. I pushed back; three of the five lesson types are blind without the page, and the entry says so.
+- **30** — lessons were being grouped by cause, so one card covered four fields. I said each correction should be ratified separately, because a shared cause can be right about three fields and wrong about the fourth. The entry records that the change came from being told.
+- **32** — the recorded reply guessed which fund a document belonged to from its filename. Real documents are called `financial_detail_4471.pdf`. Removed.
+- **33** — a bug was diagnosed from a plausible theory rather than a measurement, and a fix was shipped for the wrong cause. The entry was rewritten to say so rather than quietly corrected.
+
+The register is one I asked for and pulled back when it drifted into marketing. Where an argument was had, the entry keeps the argument rather than only the conclusion — that is the part worth reading, and it is the part I would have to defend.
+
 ---
 
 Problem selection - Problem 3
