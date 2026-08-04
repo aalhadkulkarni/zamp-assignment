@@ -30,13 +30,34 @@ export function getPool(): pg.Pool {
     }
     pool = new pg.Pool({
       connectionString,
-      // Managed Postgres almost always terminates TLS with a certificate this
-      // client has no chain for. Refusing to connect would be principled and
-      // useless; the connection is still encrypted.
-      ssl: connectionString.includes('localhost') ? undefined : { rejectUnauthorized: false },
+      // TLS only when the database is reached over a public network, which is
+      // what a dotted hostname means here. Render's internal address is a bare
+      // host on their private network and localhost is a socket away — both
+      // would be asking for TLS from something not offering it.
+      //
+      // Where TLS is used, the certificate goes unverified: managed providers
+      // terminate with a chain this client does not carry, and refusing to
+      // connect over that would be principled and useless. The connection is
+      // still encrypted.
+      ssl: reachedOverPublicNetwork(connectionString) ? { rejectUnauthorized: false } : undefined,
     });
   }
   return pool;
+}
+
+/**
+ * A dotted hostname means the internet: Render's external address, Neon,
+ * Supabase. A bare host is Render's private network, and localhost is local.
+ */
+function reachedOverPublicNetwork(connectionString: string): boolean {
+  try {
+    const { hostname } = new URL(connectionString);
+    return hostname.includes('.') && hostname !== '127.0.0.1';
+  } catch {
+    // An unparseable string is about to fail at connect time and say so more
+    // clearly than a guess about its transport would.
+    return false;
+  }
 }
 
 export async function closePool(): Promise<void> {
