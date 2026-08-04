@@ -322,9 +322,10 @@ a caller and another tenant's data.
 Arbitrary bytes accepted up to 10 MB, stored in Postgres, and sent to Anthropic.
 No content inspection beyond the extension.
 
-### 8.4 Cost has no ceiling · **open**
-No per-tenant budget, no rate limiting, no accounting surfaced. Ten analysts
-uploading ten documents each is a real bill with nothing to stop it.
+### 8.4 Cost has no ceiling, and is not even counted · **open**
+No per-tenant budget and no rate limiting. Worse than that: the token counts come
+back on every model reply, are read into a variable, and are then discarded —
+so there is no bill to look at even after the fact. See NotBuilt.md.
 
 ---
 

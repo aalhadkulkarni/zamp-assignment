@@ -70,11 +70,36 @@ a guarantee.
 only when someone remembers to run them is a repository whose tests will
 eventually be red.
 
-### Operating it
+### Knowing what it is doing
 
-No metrics, no tracing, no error reporting, and no cost accounting. The last of
-those matters more here than usual: every extraction is a model call, and
-nothing in this system would notice a tenant running up a bill.
+There is structured logging — Fastify's, with an analysis id on every line that
+matters — but looking at what it actually records is not flattering. **Every log
+statement in the service is a failure.** An extraction that works writes nothing
+at all. So the logs answer "what broke" and are silent on "is it working, and how
+well", which is the question you have on a normal day.
+
+Three specific things, in order of how much they annoy me:
+
+**The token counts arrive and are thrown away.** Every model reply carries
+`input_tokens` and `output_tokens`, and `anthropic.ts` reads them, puts them in
+the reply object, and then nothing stores or logs them. The cost of every
+extraction and every diagnosis is handed to us and dropped on the floor. That is
+not "cost accounting was out of scope" — it is a number already in a variable
+that needed one `INSERT`. Per analysis and per tenant, it is also the only way to
+answer whether the correction history in the prompt is worth what it costs.
+
+**Duration is derivable and never derived.** `extraction_started_at` is stored,
+and the row is updated when the work finishes, so how long an extraction took is
+sitting in the database as a subtraction nobody performs. "Reading your documents
+usually takes under a minute" is a claim from watching it, not from measuring it.
+
+**A failure the analyst sees cannot be found in the logs.** Fastify assigns a
+request id and the browser never sees it, so an analyst saying "it broke at about
+four" leaves you grepping by timestamp. Surfacing the id on the error and logging
+it with the failure is small and would pay for itself the first time.
+
+Beyond that, and genuinely out of scope for a take-home: no metrics, no tracing,
+no error reporting, and no alerting on any of it.
 
 ### Data lifecycle
 
