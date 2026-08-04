@@ -8,10 +8,16 @@ these numbers before the statements themselves.
 Both are **synthetic**. The layout, labels and traps are drawn from real CalPERS
 and CalSTRS reports; the figures are invented and should not be quoted as fact.
 
-| File | Fund | Reports in |
-|---|---|---|
-| `calpers-2025-mda.txt` | CalPERS | thousands |
-| `calstrs-2025-mda.txt` | CalSTRS | whole dollars |
+| Files | Fund | Reports in | What it exercises |
+|---|---|---|---|
+| `calpers-2025-mda.txt` | CalPERS | thousands | column ambiguity, a value with no total printed, a units heading pages from the figures |
+| `calstrs-2025-mda.txt` | CalSTRS | whole dollars | the wrong-fund refusal, and a synonym for net position |
+| `nyscrf-2025-mda.txt` | NY Common Retirement Fund | whole dollars | the easy case — one fund, every value stated plainly |
+| `florida-sba-2025-mda.txt` | Florida Retirement System | **millions** | a third scale, and a document that warns its own tables disagree with its statements |
+| `trs-texas-2025-financial.txt` + `trs-texas-2025-investments.txt` | Teacher Retirement System of Texas | millions | **two documents**, with one value derivable only by combining them |
+
+Every fund reports in a different scale on purpose. A units lesson learned on
+one must not be applied to another, which is what fund-scoping is for.
 
 ## What each one is for
 
@@ -78,6 +84,56 @@ extractor:
 | `total_assets` | 349,117,552,904 |
 | `total_liabilities` | 12,006,338,771 |
 | `net_position` | 337,111,214,133 |
+
+### `nyscrf-2025-mda.txt`
+
+The control. One fund, no columns, whole dollars, every value stated in plain
+words. If extraction gets anything wrong here the problem is not the document.
+
+| | |
+|---|---|
+| `total_receivables` | 3,118,224,901 |
+| `total_investments` | 267,401,338,552 |
+| `total_assets` | 274,905,117,663 |
+| `total_liabilities` | 8,442,190,338 |
+| `net_position` | 266,462,927,325 |
+
+### `florida-sba-2025-mda.txt`
+
+A third scale — **millions**, not thousands or whole dollars — so a units lesson
+ratified for CalPERS must not reach it. The page also warns that its own tables
+and statements use different bases, which is a distractor rather than an
+instruction.
+
+Multiply each by 1,000,000: investments 187,443 · receivables 2,091 · assets
+191,884 · liabilities 5,336 · net position 186,548.
+
+### `trs-texas-2025-financial.txt` and `trs-texas-2025-investments.txt`
+
+**Upload both together.** This is the case a single document cannot test.
+
+Total investments appears in **neither file**. The financial section gives the
+domestic portfolio, 118,447; the investment section — issued as a separate
+document — gives the international portfolio, 82,916. The first file says
+outright that no combined figure is presented and that both schedules are
+needed. The right answer is 201,363 million, derived, and the reasoning should
+say it came from two documents.
+
+Everything else is in the first file only, so it also tests that the agent does
+not get confused about which document a value came from.
+
+| | |
+|---|---|
+| `total_receivables` | 4,118,000,000 |
+| `total_investments` | **201,363,000,000** — derived, stated nowhere |
+| `total_assets` | 209,884,000,000 |
+| `total_liabilities` | 6,742,000,000 |
+| `net_position` | 203,142,000,000 |
+
+A reasonable alternative answer is to return nothing for total investments,
+since it is not printed — the same judgement the CalPERS receivables case asks
+for. Either is defensible, and correcting whichever it chooses is itself a good
+test of the diagnosis.
 
 ## A note on format
 
