@@ -230,15 +230,15 @@ per-tenant configuration fetched from the customer's API, not code.
 
 ## Deliberately not built
 
-Named here rather than left to be discovered:
+Some of it is chores any product needs — authentication, a second tenant, an
+admin surface, CI, cost accounting. `tenantId` is threaded through every query
+and resolved from a constant, so the seam is there.
 
-- **Authentication.** `tenantId` is threaded through everything and resolved from
-  a constant, so the seam exists.
-- **Chat-driven corrections.** Edit-triggered diagnosis is the focus; correcting
-  the agent in prose reintroduces exactly the ambiguity this design removes.
-- **Automatic section location** in a full report.
-- **Viewing or revoking accepted lessons**, which is the honest gap in the
-  learning loop — see [EdgeCases.md](EdgeCases.md) §5.
+The rest is part of the problem and is what I would build next. The largest is
+that there is no way to **see or revoke what has been learned**: the design rests
+on nothing becoming a rule without a human confirming it, and the inverse does
+not exist.
 
-[EdgeCases.md](EdgeCases.md) is the fuller survey: what happens today, what
-should, and which six would be worth the next day's work.
+[NotBuilt.md](NotBuilt.md) is the full list, in both categories, with the
+reasoning. [EdgeCases.md](EdgeCases.md) covers what happens today when something
+goes wrong.

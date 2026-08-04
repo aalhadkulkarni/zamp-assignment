@@ -1,3 +1,10 @@
+A running log of the calls made while building this, in the order they were made — the decision, the alternatives seriously considered, and what was given up.
+
+For what is deliberately **not** built and why, see [NotBuilt.md](NotBuilt.md).
+For how it behaves when something goes wrong, see [EdgeCases.md](EdgeCases.md).
+
+---
+
 Problem selection - Problem 3
 Why - It's a genuine business problem, where companies may want to automate some of their analytics work using AI. It's a difficult problem, where not only does AI need to read the unstructured text from many different sources, but it needs to understand exactly what the user needs from this unstructured data. It also needs to learn from the mistakes it does - this is where a human comes into picture where the human reviews the AI works and corrects it.
 So this problem has multiple difficult sub problems that need solving, and genuine work on front end side.
