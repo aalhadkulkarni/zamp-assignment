@@ -243,6 +243,11 @@
   white-space: nowrap;
 }
 
+.field-label {
+  display: block;
+  font-weight: 500;
+}
+
 .field-key {
   display: block;
   color: var(--text-h);

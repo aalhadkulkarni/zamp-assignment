@@ -17,6 +17,7 @@ vi.mock('./api', async (importOriginal) => ({
   submitEdits: vi.fn(),
   decideLesson: vi.fn(),
   watchAnalysis: vi.fn(),
+  listFieldDefinitions: vi.fn(),
 }));
 
 const mockListFunds = vi.mocked(api.listFunds);
@@ -88,6 +89,10 @@ const server = {
     });
 
     mockListFunds.mockResolvedValue(FUNDS);
+    vi.mocked(api.listFieldDefinitions).mockResolvedValue([
+      { key: 'total_investments', label: 'Total Investments', type: 'money', unit: 'USD', required: true, description: '' },
+      { key: 'total_receivables', label: 'Total Receivables', type: 'money', unit: 'USD', required: true, description: '' },
+    ]);
     vi.mocked(api.listAnalyses).mockImplementation(async () => [...server.analyses.values()]);
     vi.mocked(api.getAnalysis).mockImplementation(async (id) => {
       const found = server.analyses.get(id);
@@ -1928,5 +1933,44 @@ describe('a slow read answering after a newer one', () => {
     expect(
       screen.queryByText(/Working out what caused those corrections/),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The field's human name comes from the customer, not from us and not from a
+ * model. They already publish it; inventing our own would put a second name on
+ * screen that their system has never heard of, and asking Claude to make one up
+ * from the key would pay for a lookup and get a different answer each time.
+ */
+describe('field names in the review table', () => {
+  async function reviewing() {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+    return user;
+  }
+
+  it("shows the customer's label, with the key still beside it", async () => {
+    await reviewing();
+
+    const table = within(screen.getByRole('table'));
+    expect(table.getByText('Total Investments')).toBeInTheDocument();
+    expect(table.getByText('Total Receivables')).toBeInTheDocument();
+    // The key is what their API is written against, and what a lesson names.
+    expect(table.getByText('total_investments')).toBeInTheDocument();
+  });
+
+  /** A label is presentation. Losing it must not cost the analyst the value. */
+  it('falls back to the key when the customer cannot be reached', async () => {
+    vi.mocked(api.listFieldDefinitions).mockRejectedValue(new Error('customer-system is down'));
+    await reviewing();
+
+    const table = within(screen.getByRole('table'));
+    expect(table.getByText('total_investments')).toBeInTheDocument();
+    expect(table.queryByText('Total Investments')).not.toBeInTheDocument();
+    // The values are still there, which is the point.
+    expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073000');
   });
 });

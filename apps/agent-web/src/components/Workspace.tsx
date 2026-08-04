@@ -10,6 +10,8 @@ import ReviewTable from './ReviewTable';
 
 type Props = {
   analysis: StoredAnalysis;
+  /** Field key to the customer's own label for it. May be empty. */
+  labels: Record<string, string>;
   edits: Record<string, string>;
   editEvents: EditEvent[];
   writeProblems: Record<string, string>;
@@ -27,6 +29,7 @@ type Props = {
 
 export default function Workspace({
   analysis,
+  labels,
   edits,
   editEvents,
   writeProblems,
@@ -128,6 +131,7 @@ export default function Workspace({
             <>
               <ReviewTable
                 fields={analysis.fields}
+                labels={labels}
                 edits={edits}
                 problems={writeProblems}
                 readOnly={approved}

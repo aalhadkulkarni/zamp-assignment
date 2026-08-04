@@ -76,6 +76,20 @@ export type StoredAnalysis = AnalysisSummary & {
   lessons: Lesson[];
 };
 
+/** The customer's own naming for their own fields. See the route's comment. */
+export type FieldDefinition = {
+  key: string;
+  label: string;
+  type: string;
+  unit: string;
+  required: boolean;
+  description: string;
+};
+
+export function listFieldDefinitions(): Promise<FieldDefinition[]> {
+  return json<FieldDefinition[]>('/field-definitions');
+}
+
 export function createAnalysis(fundId: string): Promise<AnalysisSummary> {
   return json<AnalysisSummary>('/analyses', {
     method: 'POST',

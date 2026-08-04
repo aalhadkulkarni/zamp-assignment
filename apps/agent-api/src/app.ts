@@ -101,6 +101,23 @@ export async function buildApp() {
    * exist is their fact, not ours, and the day they add one we should not need a
    * deploy.
    */
+  /**
+   * Passed through, not restated. The label an analyst reads is the customer's
+   * own naming for their own field — inventing our own, or asking a model to
+   * make one up from the key, would put a second name on screen that their
+   * system has never heard of.
+   */
+  app.get('/field-definitions', async (_request, reply) => {
+    try {
+      return await listFieldDefinitions();
+    } catch (error) {
+      if (error instanceof CustomerSystemError) {
+        return reply.code(502).send({ error: 'CustomerSystemUnavailable', message: error.message });
+      }
+      throw error;
+    }
+  });
+
   app.get('/funds', async (_request, reply) => {
     try {
       return await listFunds();

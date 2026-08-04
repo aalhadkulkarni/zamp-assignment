@@ -6,6 +6,7 @@ import {
   decideLesson,
   getAnalysis,
   listAnalyses,
+  listFieldDefinitions,
   submitEdits,
   uploadDocuments,
   watchAnalysis,
@@ -35,6 +36,12 @@ export default function App() {
    * "No analyses yet" is a claim we cannot make until the server has answered.
    */
   const [listLoading, setListLoading] = useState(true);
+  /**
+   * The customer's own names for their own fields, fetched once. Falls back to
+   * the key, so a customer-system that is unreachable costs a nicer label and
+   * nothing else.
+   */
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const [current, setCurrent] = useState<StoredAnalysis | null>(null);
   const [view, setView] = useState<View>({ name: 'list' });
   const [writing, setWriting] = useState(false);
@@ -87,6 +94,19 @@ export default function App() {
       if (read !== reads.current) return;
       setFailure(error instanceof Error ? error.message : 'Could not load that analysis.');
     }
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    listFieldDefinitions()
+      .then((definitions) => {
+        if (live) setLabels(Object.fromEntries(definitions.map((d) => [d.key, d.label])));
+      })
+      // Deliberately swallowed. Labels are presentation; the analysis is not.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
   }, []);
 
   // Fetched in a callback rather than set synchronously, which is the shape the
@@ -298,6 +318,7 @@ export default function App() {
     return (
       <Workspace
         analysis={current}
+        labels={labels}
         edits={edits}
         editEvents={editEvents}
         writeProblems={writeProblems}

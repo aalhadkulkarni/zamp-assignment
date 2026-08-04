@@ -1803,3 +1803,27 @@ describe('checking the document is for this fund', () => {
     }
   });
 });
+
+/** The labels an analyst reads are the customer's own, passed through. */
+describe('GET /field-definitions', () => {
+  it('returns what the customer publishes, unchanged', async () => {
+    const res = await app.inject({ method: 'GET', url: '/field-definitions' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([
+      expect.objectContaining({ key: 'total_investments', label: expect.any(String) }),
+      expect.objectContaining({ key: 'net_position', label: expect.any(String) }),
+    ]);
+  });
+
+  it('says so when the customer cannot be reached', async () => {
+    const { listFieldDefinitions, CustomerSystemError } = await import('./customer.js');
+    vi.mocked(listFieldDefinitions).mockRejectedValueOnce(
+      new CustomerSystemError('customer-system is unreachable'),
+    );
+    const res = await app.inject({ method: 'GET', url: '/field-definitions' });
+
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toBe('CustomerSystemUnavailable');
+  });
+});

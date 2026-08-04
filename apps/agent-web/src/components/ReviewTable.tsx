@@ -2,6 +2,7 @@ import type { ReviewField } from '../api';
 
 type Props = {
   fields: ReviewField[];
+  labels: Record<string, string>;
   edits: Record<string, string>;
   /** Per-field rejections from the customer's system, keyed by field. */
   problems: Record<string, string>;
@@ -41,6 +42,7 @@ function readable(raw: string): string | null {
 
 export default function ReviewTable({
   fields,
+  labels,
   edits,
   problems,
   readOnly,
@@ -77,7 +79,12 @@ export default function ReviewTable({
                 .join(' ')}
             >
               <td>
-                <span className="field-key">{field.key}</span>
+                {/* The customer's label reads first, because that is what the
+                    analyst is looking for. The key stays underneath: it is the
+                    identifier their API is written against, and it is what the
+                    lesson cards name. */}
+                <span className="field-label">{labels[field.key] ?? field.key}</span>
+                {labels[field.key] && <span className="field-key">{field.key}</span>}
                 {edited ? (
                   <span className="confidence edited-tag">edited</span>
                 ) : (

@@ -1,12 +1,12 @@
 # Sample documents
 
-Two excerpts for exercising the real extraction path. Both are written in the
-style of a Management's Discussion and Analysis section — prose citing the
-figures rather than a table of them, which is how an ACFR actually presents
+Excerpts for exercising the real extraction path, one set per fund. They are
+written in the style of a Management's Discussion and Analysis section — prose
+citing the figures rather than a table of them, which is how an ACFR presents
 these numbers before the statements themselves.
 
-Both are **synthetic**. The layout, labels and traps are drawn from real CalPERS
-and CalSTRS reports; the figures are invented and should not be quoted as fact.
+All are **synthetic**. The layout, labels and traps are drawn from real reports;
+the figures are invented and should not be quoted as fact.
 
 | Files | Fund | Reports in | What it exercises |
 |---|---|---|---|
