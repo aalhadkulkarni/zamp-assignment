@@ -4,8 +4,9 @@ import { readable } from '../format';
 
 type Props = {
   lesson: Lesson;
-  onAccept: (id: string) => void;
-  onReject: (id: string, comment: string) => void;
+  /** Awaited, so the card can show that the decision is being recorded. */
+  onAccept: (id: string) => Promise<void>;
+  onReject: (id: string, comment: string) => Promise<void>;
 };
 
 /** What each type means, in the analyst's language rather than ours. */
@@ -31,6 +32,24 @@ const SCOPE_LABEL: Record<LessonScope, string> = {
 export default function LessonCard({ lesson, onAccept, onReject }: Props) {
   const [rejecting, setRejecting] = useState(false);
   const [comment, setComment] = useState('');
+  /**
+   * A decision is a round trip, and this one is consequential — it is what makes
+   * a rule apply to every future document from this fund. A button that looks
+   * unchanged after being pressed invites a second press.
+   */
+  const [saving, setSaving] = useState(false);
+
+  async function decide(record: () => Promise<void>) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await record();
+    } finally {
+      // Released either way. On success the card re-renders as decided and the
+      // buttons go with it; on failure they have to work again.
+      setSaving(false);
+    }
+  }
 
   if (lesson.decision === 'accepted') {
     return (
@@ -98,21 +117,29 @@ export default function LessonCard({ lesson, onAccept, onReject }: Props) {
             placeholder="The figures were already in whole dollars on that page."
           />
           <div className="lesson-actions">
-            <button onClick={() => setRejecting(false)}>Cancel</button>
+            <button onClick={() => setRejecting(false)} disabled={saving}>
+              Cancel
+            </button>
             <button
               className="primary"
-              onClick={() => onReject(lesson.id, comment.trim())}
-              disabled={comment.trim() === ''}
+              onClick={() => decide(() => onReject(lesson.id, comment.trim()))}
+              disabled={comment.trim() === '' || saving}
             >
-              Send correction
+              {saving ? 'Saving…' : 'Send correction'}
             </button>
           </div>
         </div>
       ) : (
         <div className="lesson-actions">
-          <button onClick={() => setRejecting(true)}>That's not it</button>
-          <button className="primary" onClick={() => onAccept(lesson.id)}>
-            {lesson.scope === 'none' ? 'Agreed' : 'Remember this'}
+          <button onClick={() => setRejecting(true)} disabled={saving}>
+            That's not it
+          </button>
+          <button
+            className="primary"
+            onClick={() => decide(() => onAccept(lesson.id))}
+            disabled={saving}
+          >
+            {saving ? 'Saving…' : lesson.scope === 'none' ? 'Agreed' : 'Remember this'}
           </button>
         </div>
       )}

@@ -1621,3 +1621,100 @@ describe('the evidence on a lesson card', () => {
     expect(card.querySelector('.lesson-fields')).toBeNull();
   });
 });
+
+/**
+ * Accepting a lesson is a round trip, and a consequential one — it is the click
+ * that makes a rule apply to every future document from this fund. A button
+ * that looks unchanged after being pressed invites a second press.
+ */
+describe('recording a decision on a lesson', () => {
+  const LESSON = {
+    id: 'lesson-1',
+    type: 'units' as const,
+    scope: 'fund' as const,
+    fieldKeys: ['total_investments'],
+    explanation: 'I applied the thousands heading.',
+    rule: 'For this fund, treat the figures as being in 1,000s.',
+    unitsMultiplier: 1000,
+    documentLabel: '',
+    confidence: 'high' as const,
+    corrections: [{ fieldKey: 'total_investments', from: '462090073000', to: '462090073' }],
+  };
+
+  /** Holds the decision open so the pending state can be observed. */
+  function holdDecision() {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const real = vi.mocked(api.decideLesson).getMockImplementation()!;
+    vi.mocked(api.decideLesson).mockImplementation(async (...args) => {
+      await held;
+      return real(...args);
+    });
+    return release;
+  }
+
+  async function proposalShown() {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    server.diagnoses({ summary: 'Here is what I think went wrong.', lessons: [LESSON] });
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), '462090073');
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    await screen.findByText('Wrong units');
+    return user;
+  }
+
+  it('shows the accept button saving, and will not take a second click', async () => {
+    const user = await proposalShown();
+    const release = holdDecision();
+
+    await user.click(screen.getByRole('button', { name: 'Remember this' }));
+
+    const saving = await screen.findByRole('button', { name: 'Saving…' });
+    expect(saving).toBeDisabled();
+    // A second decision on the same lesson would be a second round trip.
+    expect(screen.getByRole('button', { name: "That's not it" })).toBeDisabled();
+    expect(api.decideLesson).toHaveBeenCalledTimes(1);
+
+    release();
+    expect(await screen.findByText(/^Accepted —/)).toBeInTheDocument();
+  });
+
+  it('shows the same while a rejection is being recorded', async () => {
+    const user = await proposalShown();
+
+    await user.click(screen.getByRole('button', { name: "That's not it" }));
+    await user.type(
+      screen.getByLabelText('What actually happened?'),
+      'Those figures were already in whole dollars.',
+    );
+
+    const release = holdDecision();
+    await user.click(screen.getByRole('button', { name: 'Send correction' }));
+
+    expect(await screen.findByRole('button', { name: 'Saving…' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+
+    release();
+    expect(await screen.findByText('Rejected.')).toBeInTheDocument();
+  });
+
+  /** A failure has to give the buttons back, or the lesson can never be decided. */
+  it('lets the analyst try again when recording the decision fails', async () => {
+    const user = await proposalShown();
+    vi.mocked(api.decideLesson).mockRejectedValueOnce(new Error('agent-api is unreachable'));
+
+    await user.click(screen.getByRole('button', { name: 'Remember this' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('agent-api is unreachable');
+    expect(screen.getByRole('button', { name: 'Remember this' })).toBeEnabled();
+  });
+});

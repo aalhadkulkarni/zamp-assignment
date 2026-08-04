@@ -20,8 +20,8 @@ type Props = {
   onCommit: (key: string) => void;
   onRevert: (key: string) => void;
   onConfirm: (fiscalYearEnd: string) => void;
-  onAcceptLesson: (lessonId: string) => void;
-  onRejectLesson: (lessonId: string, comment: string) => void;
+  onAcceptLesson: (lessonId: string) => Promise<void>;
+  onRejectLesson: (lessonId: string, comment: string) => Promise<void>;
   onBack: () => void;
 };
 
