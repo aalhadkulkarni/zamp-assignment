@@ -271,6 +271,18 @@
   margin-top: 4px;
 }
 
+/* Deliberately louder than .reasoning: this is the system having changed a
+   number on its own authority, and it should read that way. */
+.lesson-note {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-left: 2px solid var(--accent);
+  background: var(--accent-bg, rgba(255, 255, 255, 0.04));
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .row-rejected {
   background: var(--danger-bg);
 }

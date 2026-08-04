@@ -206,12 +206,39 @@ export async function extract(
  * Arguments are accepted and ignored. An identical signature to `extract` is
  * what lets the route pick between the two without knowing which it got.
  */
+/**
+ * A recorded extraction, so the whole flow runs with no key and no spend.
+ *
+ * It reads its own inputs rather than ignoring them. When a ratified lesson has
+ * reached the request — a label in the field's schema description, a rule in the
+ * prompt — the recorded answer changes accordingly. That keeps the demo honest:
+ * the second document improves because the lesson actually arrived, not because
+ * a fixture was told to pretend it did. The assertion in the test is the same
+ * one an analyst makes watching it.
+ */
 export async function extractFixture(
-  _prompt: string,
+  prompt: string,
   _attachments: Attachment[],
-  _schema: Record<string, unknown>,
+  schema: Record<string, unknown>,
 ): Promise<ExtractionReply> {
   await sleep(fixtureDelayMs());
+
+  const taught = describedFields(schema);
+
+  // A wrong_source lesson lands in the prompt's reading instructions.
+  const readsTotalColumn = /total column|combined column|all plans/i.test(prompt);
+  // A synonym lesson lands in the field's own slot in the output schema.
+  const knowsReceivablesLabel = /also been printed as/i.test(taught.total_receivables ?? '');
+
+  const column = readsTotalColumn ? 'Total column' : 'PERF A column';
+
+  const summary = readsTotalColumn
+    ? 'I found the values on the statement of fiduciary net position. The figures are ' +
+      'reported in thousands, and this page carries six plan columns — I read the Total ' +
+      'column, as you confirmed. '
+    : 'I found the values on the statement of fiduciary net position. The figures are ' +
+      'reported in thousands, and this page carries six plan columns — I read PERF A, ' +
+      'the largest. ';
 
   return {
     model: 'claude-opus-5',
@@ -219,62 +246,84 @@ export async function extractFixture(
     usage: { inputTokens: 24_180, outputTokens: 742 },
     extraction: {
       summary:
-        'I found four of the five values on the statement of fiduciary net position. ' +
-        'The figures are reported in thousands, and this page carries six plan columns — ' +
-        'I read PERF A, the largest. Total receivables is shown only as a breakdown by ' +
-        'counterparty, with no combined line, so I have left it blank rather than adding ' +
-        'the components up myself.',
-      fields: [
-        {
-          key: 'total_receivables',
-          valueAsPrinted: null,
-          unitsMultiplier: 1000,
-          confidence: 'low',
-          sourcePage: 1,
-          sourceText: '',
-          reasoning:
-            'No combined receivables line in the PERF A column; only the individual counterparty rows.',
-        },
-        {
-          key: 'total_investments',
-          valueAsPrinted: 462_090_073,
-          unitsMultiplier: 1000,
-          confidence: 'high',
-          sourcePage: 1,
-          sourceText: 'Total Investments $462,090,073',
-          reasoning: 'Investments at Fair Value section, PERF A column.',
-        },
-        {
-          key: 'total_assets',
-          valueAsPrinted: 508_215_927,
+        summary +
+        (knowsReceivablesLabel
+          ? 'Receivables are printed under the label you confirmed, so I have read that line.'
+          : 'Total receivables is shown only as a breakdown by counterparty, with no ' +
+            'combined line, so I have left it blank rather than adding the components up ' +
+            'myself.'),
+      fields: {
+        total_receivables: knowsReceivablesLabel
+          ? {
+              valueAsPrinted: readsTotalColumn ? 9_113_704 : 7_204_118,
+              unitsMultiplier: 1000,
+              confidence: 'medium',
+              sourcePage: 1,
+              sourceText: 'Receivables, Net $7,204,118',
+              reasoning: `${column}. Read from the label you confirmed means total receivables.`,
+            }
+          : {
+              valueAsPrinted: null,
+              unitsMultiplier: 1000,
+              confidence: 'low',
+              sourcePage: 1,
+              sourceText: '',
+              reasoning: `No combined receivables line in the ${column}; only the individual counterparty rows.`,
+            },
+        total_investments: {
+          valueAsPrinted: readsTotalColumn ? 502_073_818 : 462_090_073,
           unitsMultiplier: 1000,
           confidence: 'high',
           sourcePage: 1,
-          sourceText: 'TOTAL ASSETS $508,215,927',
-          reasoning: 'PERF A column, before deferred outflows of resources.',
+          sourceText: readsTotalColumn
+            ? 'Total Investments $502,073,818'
+            : 'Total Investments $462,090,073',
+          reasoning: `Investments at Fair Value section, ${column}.`,
         },
-        {
-          key: 'total_liabilities',
-          valueAsPrinted: 98_831_325,
+        total_assets: {
+          valueAsPrinted: readsTotalColumn ? 551_388_204 : 508_215_927,
           unitsMultiplier: 1000,
           confidence: 'high',
           sourcePage: 1,
-          sourceText: 'TOTAL LIABILITIES $98,831,325',
-          reasoning: 'PERF A column, before deferred inflows of resources.',
+          sourceText: readsTotalColumn
+            ? 'TOTAL ASSETS $551,388,204'
+            : 'TOTAL ASSETS $508,215,927',
+          reasoning: `${column}, before deferred outflows of resources.`,
         },
-        {
-          key: 'net_position',
-          valueAsPrinted: 409_424_367,
+        total_liabilities: {
+          valueAsPrinted: readsTotalColumn ? 106_927_440 : 98_831_325,
+          unitsMultiplier: 1000,
+          confidence: 'high',
+          sourcePage: 1,
+          sourceText: readsTotalColumn
+            ? 'TOTAL LIABILITIES $106,927,440'
+            : 'TOTAL LIABILITIES $98,831,325',
+          reasoning: `${column}, before deferred inflows of resources.`,
+        },
+        net_position: {
+          valueAsPrinted: readsTotalColumn ? 444_460_764 : 409_424_367,
           unitsMultiplier: 1000,
           confidence: 'high',
           sourcePage: 1,
           sourceText:
-            'NET POSITION – RESTRICTED FOR PENSION, OTHER POST-EMPLOYMENT, REPLACEMENT BENEFITS AND PROGRAM ADMINISTRATION $409,424,367',
-          reasoning: 'PERF A column. Labelled at length here, but it is the net position line.',
+            'NET POSITION – RESTRICTED FOR PENSION, OTHER POST-EMPLOYMENT, REPLACEMENT BENEFITS AND PROGRAM ADMINISTRATION $' +
+            (readsTotalColumn ? '444,460,764' : '409,424,367'),
+          reasoning: `${column}. Labelled at length here, but it is the net position line.`,
         },
-      ],
+      },
     },
   };
+}
+
+/** The per-field descriptions the schema was built with, keyed by field. */
+function describedFields(schema: Record<string, unknown>): Record<string, string> {
+  const properties = (schema.properties as Record<string, { properties?: Record<string, { description?: string }> }>)
+    ?.fields?.properties;
+  const described: Record<string, string> = {};
+  for (const [key, definition] of Object.entries(properties ?? {})) {
+    described[key] = definition.description ?? '';
+  }
+  return described;
 }
 
 export type DiagnosisReply = {
@@ -346,36 +395,52 @@ export async function diagnoseFixture(
     usage: { inputTokens: 1_840, outputTokens: 410 },
     diagnosis: {
       summary:
-        'Two separate things went wrong. I scaled the investments figure when the ' +
-        'statement had already given it in whole dollars, and I left receivables ' +
-        'blank when the analyst expects the components added up.',
+        'Three separate things went wrong, and only two of them are worth remembering. ' +
+        'I read the wrong column throughout, I did not recognise the label this ' +
+        'statement uses for receivables, and one figure I simply mistyped.',
       lessons: [
         {
-          id: 'lesson-units',
-          type: 'units',
+          id: 'lesson-column',
+          type: 'wrong_source',
           scope: 'fund',
-          fieldKeys: ['total_investments'],
+          fieldKeys: ['total_investments', 'total_assets', 'total_liabilities', 'net_position'],
           explanation:
-            'I read the "Dollars in Thousands" heading and multiplied, but the figure ' +
-            'you kept is the printed one unchanged. That suggests this statement ' +
-            'reports investments in whole dollars despite the heading.',
+            'Every figure you changed is the one printed in the Total column of the same ' +
+            'rows I read. I chose PERF A because it was the largest plan, but you want ' +
+            'the fund as a whole.',
           rule:
-            'For this fund, check whether the investments section restates its units ' +
-            'before applying the heading multiplier.',
-          confidence: 'medium',
+            'For this fund, read the Total column of the statement of fiduciary net ' +
+            'position rather than an individual plan column.',
+          unitsMultiplier: null,
+          documentLabel: '',
+          confidence: 'high',
         },
         {
           id: 'lesson-receivables',
-          type: 'wrong_source',
+          type: 'synonym',
           scope: 'fund',
           fieldKeys: ['total_receivables'],
           explanation:
-            'I left this blank because there was no combined receivables line. You ' +
-            'supplied a figure, which matches the sum of the counterparty rows.',
-          rule:
-            'For this fund, when a total is not printed but its components are, add ' +
-            'the components and say that is what you did.',
+            'I left this blank because I was looking for a line saying total receivables. ' +
+            'The figure you entered is printed on the line labelled "Receivables, Net", ' +
+            'which I did not recognise as the same thing.',
+          rule: 'Treat "Receivables, Net" as the total receivables line for this fund.',
+          unitsMultiplier: null,
+          documentLabel: 'Receivables, Net',
           confidence: 'high',
+        },
+        {
+          id: 'lesson-slip',
+          type: 'typo',
+          scope: 'none',
+          fieldKeys: [],
+          explanation:
+            'The last digit you changed does not correspond to anything else on the page. ' +
+            'I think I simply transcribed it wrongly, which is not a pattern.',
+          rule: '',
+          unitsMultiplier: null,
+          documentLabel: '',
+          confidence: 'medium',
         },
       ],
     },

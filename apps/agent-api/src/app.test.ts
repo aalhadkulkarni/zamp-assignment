@@ -47,7 +47,11 @@ const createReport = vi.fn();
 vi.mock('./customer.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./customer.js')>()),
   listFieldDefinitions: vi.fn(async () => FIELD_DEFINITIONS),
-  listFunds: vi.fn(async () => [{ id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' }]),
+  listFunds: vi.fn(async () => [
+    { id: 'calpers', name: 'CalPERS — California Public Employees’ Retirement System' },
+    // A second fund, so scope has something to be kept away from.
+    { id: 'calstrs', name: 'CalSTRS — California State Teachers’ Retirement System' },
+  ]),
   createReport: (...args: unknown[]) => createReport(...args),
 }));
 
@@ -112,9 +116,8 @@ beforeEach(async () => {
 /** Printed in thousands, as the document prints it, so units are exercised. */
 const EXTRACTION = {
   summary: 'I found the investments total. Net position was not on these pages.',
-  fields: [
-    {
-      key: 'total_investments',
+  fields: {
+    total_investments: {
       valueAsPrinted: 462_090_073,
       unitsMultiplier: 1000,
       confidence: 'high',
@@ -122,8 +125,7 @@ const EXTRACTION = {
       sourceText: 'Total Investments $462,090,073',
       reasoning: 'Investments at Fair Value, PERF A column.',
     },
-    {
-      key: 'net_position',
+    net_position: {
       valueAsPrinted: null,
       unitsMultiplier: 1000,
       confidence: 'low',
@@ -131,7 +133,7 @@ const EXTRACTION = {
       sourceText: '',
       reasoning: 'Not present on the supplied pages.',
     },
-  ],
+  },
 };
 
 function pdf(name: string, size = 64): File {
@@ -345,10 +347,12 @@ describe('POST /analyses/:analysisId/documents', () => {
     await upload([pdf('acfr.pdf')]);
 
     const [{ output_config }] = create.mock.calls[0];
-    const keys = output_config.format.schema.properties.fields.items.properties.key.enum;
-    // An enum here means the model cannot invent a field for customer-system to
-    // reject three steps later.
-    expect(keys).toEqual(['total_investments', 'net_position']);
+    const fields = output_config.format.schema.properties.fields;
+    // One named property per field means the model can neither invent a field
+    // for customer-system to reject three steps later, nor quietly omit one.
+    expect(Object.keys(fields.properties)).toEqual(['total_investments', 'net_position']);
+    expect(fields.required).toEqual(['total_investments', 'net_position']);
+    expect(fields.additionalProperties).toBe(false);
   });
 
   it('refuses an upload that does not say which fund it is for', async () => {
@@ -441,7 +445,7 @@ describe('POST /analyses/:analysisId/documents', () => {
 
       expect(status).toBe(200);
       expect(body.agent.fixture).toBe(true);
-      expect(body.agent.summary).toMatch(/four of the five values/i);
+      expect(body.agent.summary).toMatch(/statement of fiduciary net position/i);
       expect(body.agent.fields).toHaveLength(5);
       expect(create).not.toHaveBeenCalled();
     });
@@ -637,6 +641,8 @@ describe('POST /analyses/:analysisId/edits', () => {
               fieldKeys: ['total_investments'],
               explanation: 'The heading said thousands but this section did not follow it.',
               rule: 'Check whether the investments section restates its units.',
+              unitsMultiplier: 1,
+              documentLabel: '',
               confidence: 'medium',
             },
           ],
@@ -835,5 +841,281 @@ describe('POST /analyses/:analysisId/edits', () => {
     const { status, body } = await submit({ edits: [EDIT] });
     expect(status).toBe(400);
     expect(body.error).toBe('InvalidRequest');
+  });
+});
+
+/**
+ * The payoff, end to end: a correction on one document changes how the next one
+ * is read. Each test teaches one lesson type and then asserts it arrived at its
+ * own point in the pipeline — the output schema, the prompt, or the arithmetic.
+ * A single "it all goes in the prompt" implementation would fail four of these.
+ */
+describe('applying what was learned', () => {
+  const EDIT = {
+    id: 'edit-1',
+    fieldKey: 'total_investments',
+    from: '462090073000',
+    to: '462090073',
+    at: '2026-08-04T10:00:00.000Z',
+    context: {
+      sourceText: 'Total Investments $462,090,073',
+      sourcePage: 1,
+      confidence: 'high',
+      reasoning: 'PERF A column.',
+    },
+  };
+
+  /**
+   * The whole loop as an analyst walks it: correct, receive a diagnosis, ratify
+   * it. Nothing here reaches into the database — a lesson that only applies
+   * because a test inserted it would prove nothing about the route that stores
+   * one.
+   */
+  async function ratify(proposed: Record<string, unknown>, decision = 'accepted') {
+    create.mockResolvedValueOnce({
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ summary: 'Here is what I think went wrong.', lessons: [proposed] }),
+        },
+      ],
+      usage: { input_tokens: 1840, output_tokens: 410 },
+    });
+
+    const submitted = await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/edits`,
+      payload: { fundId: 'calpers', edits: [EDIT] },
+    });
+    const [lesson] = submitted.json().diagnosis.lessons;
+
+    await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/lessons/${lesson.id}`,
+      payload: { decision },
+    });
+    return lesson;
+  }
+
+  /** A second analysis, for the same fund, as a fresh document would arrive. */
+  async function nextDocument(fundId = 'calpers') {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/analyses',
+      payload: { fundId },
+    });
+    create.mockResolvedValueOnce({
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [{ type: 'text', text: JSON.stringify(EXTRACTION) }],
+      usage: { input_tokens: 100, output_tokens: 10 },
+    });
+    const { body } = await upload([pdf('next-year.pdf')], {
+      analysisId: created.json().id,
+      fundId,
+    });
+    const [{ messages, output_config }] = create.mock.calls.at(-1);
+    return {
+      body,
+      prompt: messages[0].content.at(-1).text,
+      schema: output_config.format.schema,
+    };
+  }
+
+  const SYNONYM = {
+    type: 'synonym',
+    scope: 'fund',
+    fieldKeys: ['net_position'],
+    explanation: 'This issuer prints it differently.',
+    rule: 'Treat "Fiduciary Balance Carried Forward" as net position for this fund.',
+    unitsMultiplier: null,
+    documentLabel: 'Fiduciary Balance Carried Forward',
+    confidence: 'high',
+  };
+
+  it('carries a ratified synonym into the field it belongs to', async () => {
+    await ratify(SYNONYM);
+    const { prompt, schema } = await nextDocument();
+
+    expect(schema.properties.fields.properties.net_position.description).toContain(
+      '"Fiduciary Balance Carried Forward"',
+    );
+    // The field it is not about is untouched, and the prompt never sees it.
+    expect(schema.properties.fields.properties.total_investments.description).not.toContain(
+      'Fiduciary Balance Carried Forward',
+    );
+    expect(prompt).not.toContain('Fiduciary Balance Carried Forward');
+  });
+
+  it('carries a concept confusion as the opposite instruction', async () => {
+    await ratify({ ...SYNONYM, type: 'concept_confusion', documentLabel: 'Total Fund Balance' });
+    const { schema } = await nextDocument();
+
+    const description = schema.properties.fields.properties.net_position.description;
+    expect(description).toContain('Do not read "Total Fund Balance"');
+  });
+
+  it('carries a source rule into the prompt, not the schema', async () => {
+    await ratify({
+      ...SYNONYM,
+      type: 'wrong_source',
+      rule: 'Read the Total column, not an individual plan column.',
+      documentLabel: '',
+    });
+    const { prompt, schema } = await nextDocument();
+
+    expect(prompt).toContain('Read the Total column');
+    expect(JSON.stringify(schema)).not.toContain('Total column');
+  });
+
+  /**
+   * The one that never reaches the model at all. A ratified multiplier is
+   * arithmetic we do afterwards, so it holds whatever the model decides the
+   * units heading says.
+   */
+  it('enforces a ratified units lesson after the model has answered', async () => {
+    await ratify({ ...SYNONYM, type: 'units', unitsMultiplier: 1, documentLabel: '' });
+    const { body, prompt, schema } = await nextDocument();
+
+    const investments = body.agent.fields.find(
+      (f: { key: string }) => f.key === 'total_investments',
+    );
+    // The model still said 1000. We did not ask it again; we overruled it.
+    expect(investments.value).toBe(462_090_073);
+    expect(investments.lessonNote).toMatch(/you confirmed/i);
+
+    expect(prompt).not.toContain('confirmed these rules');
+    expect(JSON.stringify(schema)).not.toContain('confirmed');
+  });
+
+  it('says in the chat what it applied', async () => {
+    await ratify(SYNONYM);
+    const { analysisId } = (await nextDocument()).body;
+
+    const stored = await app.inject({ method: 'GET', url: `/analyses/${analysisId}` });
+    const agentSaid = stored.json().messages.at(-1).text;
+    expect(agentSaid).toContain('1 label you told me to recognise');
+    // Ahead of the findings, not buried after them.
+    expect(agentSaid.indexOf('applied')).toBeLessThan(agentSaid.indexOf('I found'));
+  });
+
+  it('applies nothing until a human has ratified it', async () => {
+    await ratify(SYNONYM, 'rejected');
+    const { schema } = await nextDocument();
+
+    expect(schema.properties.fields.properties.net_position.description).not.toContain(
+      'Fiduciary Balance Carried Forward',
+    );
+  });
+
+  /** Scope is the field deciding blast radius, so it has to actually bind. */
+  it('keeps a fund-scoped lesson away from another fund', async () => {
+    await ratify(SYNONYM);
+    const { schema } = await nextDocument('calstrs');
+
+    expect(schema.properties.fields.properties.net_position.description).not.toContain(
+      'Fiduciary Balance Carried Forward',
+    );
+  });
+
+  it('carries a global lesson to every fund', async () => {
+    await ratify({ ...SYNONYM, scope: 'global' });
+    const { schema } = await nextDocument('calstrs');
+
+    expect(schema.properties.fields.properties.net_position.description).toContain(
+      '"Fiduciary Balance Carried Forward"',
+    );
+  });
+
+  /** A slip is not a rule. Nothing about a typo should survive the ratification. */
+  it('learns nothing from a typo, even when accepted', async () => {
+    await ratify({ ...SYNONYM, type: 'typo', scope: 'none', documentLabel: '', rule: '' });
+    const { body, prompt, schema } = await nextDocument();
+
+    expect(schema.properties.fields.properties.net_position.description).not.toContain('Fiduciary Balance');
+    expect(prompt).not.toContain('confirmed these rules');
+    expect(body.agent.summary).not.toContain('you have confirmed');
+  });
+
+  it('survives a restart, because the lesson is in the database', async () => {
+    await ratify(SYNONYM);
+
+    const { rows } = await getPool().query(
+      `SELECT type, scope, document_label, decision FROM lesson WHERE fund_id = 'calpers'`,
+    );
+    expect(rows).toEqual([
+      {
+        type: 'synonym',
+        scope: 'fund',
+        document_label: 'Fiduciary Balance Carried Forward',
+        decision: 'accepted',
+      },
+    ]);
+  });
+});
+
+/**
+ * Which fund an analysis is for decides which ratified lessons reach it, so it
+ * is the one fact a caller must not be able to restate. Both routes used to
+ * take it from the request body, which made every scoping guarantee above
+ * conditional on the client being honest.
+ */
+describe('the fund an analysis belongs to', () => {
+  async function otherFund() {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/analyses',
+      payload: { fundId: 'calstrs' },
+    });
+    return created.json().id;
+  }
+
+  it('refuses an upload that claims a different fund', async () => {
+    const { status, body } = await upload([pdf('acfr.pdf')], {
+      analysisId: await otherFund(),
+      fundId: 'calpers',
+    });
+
+    expect(status).toBe(409);
+    expect(body.error).toBe('FundMismatch');
+    expect(body.message).toContain('CalSTRS');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('refuses corrections that claim a different fund', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/analyses/${await otherFund()}/edits`,
+      payload: {
+        fundId: 'calpers',
+        edits: [
+          {
+            id: 'e1',
+            fieldKey: 'total_investments',
+            from: '1',
+            to: '2',
+            at: '2026-08-04T10:00:00.000Z',
+            context: { sourceText: '', sourcePage: 1, confidence: 'high', reasoning: '' },
+          },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('FundMismatch');
+    // Nothing was stored against the fund the caller named.
+    const { rows } = await getPool().query('SELECT id FROM lesson');
+    expect(rows).toEqual([]);
+  });
+
+  it('refuses an upload to an analysis that does not exist', async () => {
+    const { status, body } = await upload([pdf('acfr.pdf')], {
+      analysisId: crypto.randomUUID(),
+    });
+
+    expect(status).toBe(404);
+    expect(body.error).toBe('UnknownAnalysis');
   });
 });

@@ -291,3 +291,42 @@ The reject comment is a textarea on the card it refutes, not the chat composer. 
 A failed diagnosis does not lose the corrections. They are stored before the model is called, and a malformed or unreachable answer degrades to "recorded, but I could not work out why" rather than a 500 that would make a successful write look like a failure.
 
 Nothing is durable yet. Accepting a lesson records the decision and nothing more - persisting it, and applying it to the next extraction, is step 11.
+
+22 - Each lesson type is applied at a different point in the pipeline.
+
+This is the decision the project is about, so it gets the most space.
+
+The temptation is obvious. You have five lesson types, each with a plain-language rule attached, and you have a prompt. Concatenating the rules into the prompt takes an afternoon and demos fine. It is also one thing with five labels: the type field decorates a string that all five end up being, and nothing in the system behaves differently depending on which type was diagnosed.
+
+What stops that is asking the diagnosis for typed data instead of prose. A units lesson now has to come back with a number - 1000, not "check whether this section is in thousands". A synonym has to come back with the label exactly as printed - "Receivables, Net" - not a sentence about it. Once a lesson is a number or a string bound to a field, it can be applied by something other than a prompt, and the five types stop being interchangeable.
+
+Where each one goes:
+
+A synonym attaches to the field it is a synonym for, in the output schema. Not the prompt. The next extraction sees "In this issuer's reports this has also been printed as 'Receivables, Net'" in that field's own description, and no other field is affected.
+
+A concept confusion attaches to the same place with the opposite polarity - do not read this label for this field. Keeping the two apart matters concretely rather than tidily: flattened into one list of "notes about this field" they would contradict each other, since one says match this label and the other says avoid one.
+
+A wrong-source rule goes into the prompt, in the document-reading instructions. It is not a fact about any one field. "Read the Total column rather than an individual plan column" is about navigating the statement, and it belongs with the other navigation guidance.
+
+A units rule never reaches the model at all. We already do the multiplication ourselves - the model reports the printed figure and the multiplier separately, and we multiply, which was decision 17. A ratified units lesson replaces the multiplier at that point. The model is not asked again about something it already got wrong once and a human has since ruled on.
+
+A typo does nothing. It is a case in the switch that deliberately falls through, and it is guarded twice - the SQL never returns scope 'none', and the code ignores type 'typo' regardless. This is the one I would defend hardest if pushed. A system that cannot conclude "there is nothing to learn here" turns every slip of a keyboard into a standing rule applied silently to every future document. The ability to learn nothing is what makes the other four trustworthy.
+
+Two consequences worth stating.
+
+The output schema changed shape to make this possible. It used to be an array of objects each carrying a key; it is now one named property per field. With an array there is literally nowhere to put a per-field instruction - `items` describes all fields identically - so a synonym could only ever have been prose. Named properties give every field its own description slot. The side benefit, which was not the motive, is that `required` now lists every field, so the model can no longer return four of five or the same field twice.
+
+The units case overrules the model, which is the largest thing this system does on its own authority - a factor of a thousand, without asking. So it is the only one that annotates the row it changed: "Read as 1,000x; you confirmed this fund reports in 1s, so that is what was used." Applying a ratified rule invisibly would undo the point of ratifying it. The analyst agreed to a rule once; if they cannot see it acting, the next wrong value reads as the model getting worse rather than as a rule that needs revising.
+
+What I did not build: no confidence decay, no automatic retirement of lessons that stop helping, no detection of contradictory lessons beyond newest-wins for units. All of those are real, and all of them need usage data that a three-day take-home does not have. Inventing a decay curve with no evidence would be worse than leaving the gap visible.
+
+
+23 - An analysis owns its fund; the caller cannot restate it.
+
+Found by running the loop against the live database rather than by thinking about it, which is why it is here.
+
+Both the upload and the corrections endpoint took a fundId from the request body, and the lesson lookup used it. The fund is what decides which ratified lessons apply, so a wrong or forged value would read one fund's rules into another fund's document - the scoping guarantee that decision 22 rests on was conditional on the client being honest about a fact the server already knew.
+
+The fund is now read from the analysis row, which fixes it at creation. A body that disagrees is a 409 rather than being silently ignored, because a client sending the wrong fund is confused about something and should be told.
+
+Nothing about this is exotic. It is the ordinary rule that the server does not accept from a client what it can look up itself. Worth recording only because the bug was invisible in tests - the fixtures agreed with each other - and appeared the moment two funds existed at once.

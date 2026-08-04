@@ -23,6 +23,8 @@ export type StoredLesson = {
   fieldKeys: string[];
   explanation: string;
   rule: string;
+  unitsMultiplier: number | null;
+  documentLabel: string;
   confidence: 'high' | 'medium' | 'low';
   decision?: 'accepted' | 'rejected';
   comment?: string;
@@ -98,7 +100,8 @@ export async function getAnalysis(
       [analysisId],
     ),
     pool.query(
-      `SELECT id, type, scope, field_keys, explanation, rule, confidence, decision, comment
+      `SELECT id, type, scope, field_keys, explanation, rule, units_multiplier,
+              document_label, confidence, decision, comment
          FROM lesson WHERE analysis_id = $1 ORDER BY created_at`,
       [analysisId],
     ),
@@ -155,10 +158,35 @@ export async function getAnalysis(
         sourcePage: f.source_page,
         sourceText: f.source_text,
         reasoning: f.reasoning,
+        ...(f.lesson_note ? { lessonNote: f.lesson_note as string } : {}),
       };
     }),
     lessons: lessons.rows.map(toLesson),
   };
+}
+
+/**
+ * Which fund an analysis belongs to, according to the row rather than the
+ * caller.
+ *
+ * Both the extraction and the diagnosis need this, and both used to take it from
+ * the request body. That made the client the authority on a fact the server
+ * already knew — and the fact happens to be the one that decides which ratified
+ * lessons apply, so a wrong or forged value would read one fund's rules into
+ * another fund's document. The fund is fixed when the analysis is created and
+ * nothing afterwards may restate it.
+ */
+export async function analysisFund(
+  tenantId: string,
+  analysisId: string,
+): Promise<{ fundId: string; fundName: string } | null> {
+  const { rows } = await getPool().query(
+    'SELECT fund_id, fund_name FROM analysis WHERE id = $1 AND tenant_id = $2',
+    [analysisId, tenantId],
+  );
+  return rows.length > 0
+    ? { fundId: rows[0].fund_id as string, fundName: rows[0].fund_name as string }
+    : null;
 }
 
 export async function appendMessages(
@@ -204,8 +232,9 @@ export async function replaceFields(analysisId: string, fields: ReviewField[]): 
   for (const field of fields) {
     await pool.query(
       `INSERT INTO extracted_field (analysis_id, field_key, value, value_as_printed,
-                                    units_multiplier, confidence, source_page, source_text, reasoning)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                                    units_multiplier, confidence, source_page, source_text,
+                                    reasoning, lesson_note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
       [
         analysisId,
         field.key,
@@ -216,6 +245,7 @@ export async function replaceFields(analysisId: string, fields: ReviewField[]): 
         field.sourcePage,
         field.sourceText,
         field.reasoning,
+        field.lessonNote ?? null,
       ],
     );
   }
@@ -274,9 +304,11 @@ export async function storeLessons(
   for (const lesson of lessons) {
     const { rows } = await pool.query(
       `INSERT INTO lesson (id, tenant_id, analysis_id, batch_id, fund_id, type, scope,
-                           field_keys, explanation, rule, confidence)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING id, type, scope, field_keys, explanation, rule, confidence, decision, comment`,
+                           field_keys, explanation, rule, units_multiplier,
+                           document_label, confidence)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, type, scope, field_keys, explanation, rule, units_multiplier,
+              document_label, confidence, decision, comment`,
       [
         tenantId,
         analysisId,
@@ -289,6 +321,8 @@ export async function storeLessons(
         JSON.stringify(lesson.fieldKeys),
         lesson.explanation,
         lesson.rule,
+        lesson.unitsMultiplier,
+        lesson.documentLabel,
         lesson.confidence,
       ],
     );
@@ -307,7 +341,8 @@ export async function decideLesson(
   const { rows } = await getPool().query(
     `UPDATE lesson SET decision = $3, comment = $4, decided_at = now()
        WHERE id = $2 AND tenant_id = $1
-     RETURNING id, type, scope, field_keys, explanation, rule, confidence, decision, comment`,
+     RETURNING id, type, scope, field_keys, explanation, rule, units_multiplier,
+              document_label, confidence, decision, comment`,
     [tenantId, lessonId, decision, comment],
   );
   return rows.length > 0 ? toLesson(rows[0]) : null;
@@ -327,7 +362,8 @@ export async function applicableLessons(
   fundId: string,
 ): Promise<StoredLesson[]> {
   const { rows } = await getPool().query(
-    `SELECT id, type, scope, field_keys, explanation, rule, confidence, decision, comment
+    `SELECT id, type, scope, field_keys, explanation, rule, units_multiplier,
+              document_label, confidence, decision, comment
        FROM lesson
       WHERE tenant_id = $1
         AND decision = 'accepted'
@@ -360,6 +396,8 @@ function toLesson(row: Record<string, unknown>): StoredLesson {
     fieldKeys: row.field_keys as string[],
     explanation: row.explanation as string,
     rule: row.rule as string,
+    unitsMultiplier: numeric(row.units_multiplier),
+    documentLabel: (row.document_label as string) ?? '',
     confidence: row.confidence as StoredLesson['confidence'],
     ...(row.decision ? { decision: row.decision as 'accepted' | 'rejected' } : {}),
     ...(row.comment ? { comment: row.comment as string } : {}),

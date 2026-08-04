@@ -121,6 +121,8 @@ const SCHEMA = `
     source_page      integer,
     source_text      text NOT NULL,
     reasoning        text NOT NULL,
+    -- Set when a ratified lesson changed this row after the model answered.
+    lesson_note      text,
     PRIMARY KEY (analysis_id, field_key)
   );
 
@@ -148,6 +150,11 @@ const SCHEMA = `
     field_keys  jsonb NOT NULL,
     explanation text NOT NULL,
     rule        text NOT NULL,
+    -- The two typed payloads. A units lesson is a number we do arithmetic with;
+    -- a synonym is the exact printed label we hand to the next extraction. Both
+    -- are nullable because most lessons are neither.
+    units_multiplier numeric,
+    document_label   text NOT NULL DEFAULT '',
     confidence  text NOT NULL,
     decision    text,
     comment     text,
@@ -165,6 +172,14 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS message_by_analysis ON message (analysis_id, seq);
   CREATE INDEX IF NOT EXISTS analysis_by_tenant ON analysis (tenant_id, created_at DESC);
+
+  -- CREATE TABLE IF NOT EXISTS is a no-op against a database that already has
+  -- the table, so columns added after the first deploy need saying twice. Both
+  -- forms are idempotent, and keeping them beside each other is what stops a
+  -- new column existing locally and not in production.
+  ALTER TABLE lesson ADD COLUMN IF NOT EXISTS units_multiplier numeric;
+  ALTER TABLE lesson ADD COLUMN IF NOT EXISTS document_label text NOT NULL DEFAULT '';
+  ALTER TABLE extracted_field ADD COLUMN IF NOT EXISTS lesson_note text;
 `;
 
 export async function migrate(): Promise<void> {

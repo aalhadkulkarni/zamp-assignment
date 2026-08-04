@@ -129,6 +129,15 @@ export default function ReviewTable({
                   <span className="subtle">—</span>
                 )}
                 <span className="reasoning subtle">{field.reasoning}</span>
+
+                {/* A ratified lesson can move a value by a factor of a thousand.
+                    Doing that without saying so would undo the point of asking
+                    the analyst to ratify it in the first place. */}
+                {field.lessonNote && (
+                  <span className="lesson-note">
+                    <strong>Applied what you confirmed.</strong> {field.lessonNote}
+                  </span>
+                )}
               </td>
             </tr>
           );

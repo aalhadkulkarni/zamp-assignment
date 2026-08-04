@@ -183,7 +183,7 @@ describe('extractFixture', () => {
     const result = await mod.extractFixture('ignored', [], SCHEMA);
 
     expect(result.fixture).toBe(true);
-    expect(result.extraction.fields).toHaveLength(5);
+    expect(Object.keys(result.extraction.fields)).toHaveLength(5);
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -191,7 +191,7 @@ describe('extractFixture', () => {
   it('includes a value it could not find', async () => {
     const { extraction } = await mod.extractFixture('ignored', [], SCHEMA);
 
-    const blank = extraction.fields.find((f) => f.key === 'total_receivables');
+    const blank = extraction.fields.total_receivables;
     expect(blank?.valueAsPrinted).toBeNull();
     expect(blank?.confidence).toBe('low');
   });
@@ -200,7 +200,7 @@ describe('extractFixture', () => {
   it('reports figures unscaled, with the multiplier alongside', async () => {
     const { extraction } = await mod.extractFixture('ignored', [], SCHEMA);
 
-    const investments = extraction.fields.find((f) => f.key === 'total_investments');
+    const investments = extraction.fields.total_investments;
     expect(investments?.valueAsPrinted).toBe(462_090_073);
     expect(investments?.unitsMultiplier).toBe(1000);
   });

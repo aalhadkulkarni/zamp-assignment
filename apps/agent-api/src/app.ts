@@ -30,7 +30,9 @@ import {
   type Rejection,
 } from './documents.js';
 import {
+  analysisFund,
   appendMessages,
+  applicableLessons,
   createAnalysis,
   decideLesson,
   getAnalysis,
@@ -41,8 +43,9 @@ import {
   storeLessons,
 } from './analyses.js';
 import { diagnosisSchema, type Diagnosis } from './diagnosis.js';
-import { applyUnits, extractionSchema, type ReviewField } from './extraction.js';
+import { extractionSchema, toReviewFields, type ReviewField } from './extraction.js';
 import { diagnosisPrompt, extractionPrompt } from './prompts.js';
+import { describePlan, EMPTY_PLAN, planLessons } from './lessons.js';
 import { resolveTenant } from './tenant.js';
 
 /**
@@ -271,6 +274,21 @@ export async function buildApp() {
     }
 
     const tenantId = resolveTenant(request);
+
+    // A lesson is stored against a fund, and that fund decides every future
+    // document it reaches. The row is the authority on which one. See
+    // analysisFund.
+    const owner = await analysisFund(tenantId, analysisId);
+    if (!owner) {
+      return reply.code(404).send({ error: 'UnknownAnalysis', message: 'No such analysis.' });
+    }
+    if (owner.fundId !== fundId) {
+      return reply.code(409).send({
+        error: 'FundMismatch',
+        message: `This analysis is for ${owner.fundName}. A fund cannot be changed after it is chosen.`,
+      });
+    }
+
     const batchId = crypto.randomUUID();
     await storeCorrections(analysisId, batchId, edits);
 
@@ -280,8 +298,8 @@ export async function buildApp() {
     let diagnosis: Diagnosis | null = null;
     let error: ModelFailure | null = null;
     try {
-      const [definitions, funds] = await Promise.all([listFieldDefinitions(), listFunds()]);
-      const fundName = funds.find((f) => f.id === fundId)?.name ?? fundId;
+      const definitions = await listFieldDefinitions();
+      const fundName = owner.fundName;
       const fieldKeys = [...new Set(edits.map((e) => e.fieldKey))];
 
       // The pages the analyst was looking at. Without them the model can only
@@ -315,7 +333,7 @@ export async function buildApp() {
       // analyst can come back to it.
       diagnosis = {
         summary: result.diagnosis.summary,
-        lessons: await storeLessons(tenantId, analysisId, batchId, fundId, result.diagnosis.lessons),
+        lessons: await storeLessons(tenantId, analysisId, batchId, owner.fundId, result.diagnosis.lessons),
       };
     } catch (thrown) {
       error = describeFailure(thrown) ?? {
@@ -409,6 +427,18 @@ export async function buildApp() {
         });
       }
 
+      // The row decides, not the caller. See analysisFund.
+      const owner = await analysisFund(resolveTenant(request), analysisId);
+      if (!owner) {
+        return reply.code(404).send({ error: 'UnknownAnalysis', message: 'No such analysis.' });
+      }
+      if (owner.fundId !== fundId) {
+        return reply.code(409).send({
+          error: 'FundMismatch',
+          message: `This analysis is for ${owner.fundName}. A fund cannot be changed after it is chosen.`,
+        });
+      }
+
       const promptError = validatePrompt(prompt);
       if (promptError) {
         return reply.code(400).send({ error: 'InvalidPrompt', message: promptError });
@@ -438,6 +468,7 @@ export async function buildApp() {
       // that may be missing, with the reason alongside it.
       let agent: ExtractionResult | null = null;
       let agentError: ModelFailure | null = null;
+      let plan = EMPTY_PLAN;
 
       // Chosen per request rather than at startup, so a test can flip the flag
       // without rebuilding the app.
@@ -447,23 +478,36 @@ export async function buildApp() {
         // browser. It is their contract, and a client that could choose it could
         // choose what ends up in their database. The fund's name is theirs too —
         // the browser sends an id, never a label we then repeat back as fact.
-        const [definitions, funds] = await Promise.all([listFieldDefinitions(), listFunds()]);
-        fundName = funds.find((f) => f.id === fundId)?.name ?? fundId;
+        const [definitions, ratified] = await Promise.all([
+          listFieldDefinitions(),
+          // Everything an analyst has confirmed that applies to this fund. This
+          // is the query the database exists for, and this is where the loop
+          // closes: a correction made on one document changes how the next one
+          // is read.
+          applicableLessons(resolveTenant(request), owner.fundId),
+        ]);
+        fundName = owner.fundName;
+
+        // Each type goes somewhere different — the schema, the prompt, or the
+        // arithmetic below. See lessons.ts for why that separation is the point.
+        plan = planLessons(ratified);
+
         const reply_ = await run(
-          extractionPrompt(fundName, definitions, prompt),
+          extractionPrompt(fundName, definitions, prompt, plan.navigation),
           documents.map((doc) => ({
             filename: doc.filename,
             extension: extname(doc.filename).toLowerCase(),
             bytes: doc.bytes,
           })),
-          extractionSchema(definitions) as unknown as Record<string, unknown>,
+          extractionSchema(definitions, plan.guidance) as unknown as Record<string, unknown>,
         );
 
         agent = {
           model: reply_.model,
           summary: reply_.extraction.summary,
-          // The multiplication happens here, not in the model. See applyUnits.
-          fields: reply_.extraction.fields.map(applyUnits),
+          // The multiplication happens here, not in the model, and a ratified
+          // units lesson is enforced here too. See applyUnits.
+          fields: toReviewFields(reply_.extraction, plan.expectedMultiplier),
           usage: reply_.usage,
           fixture: reply_.fixture,
         };
@@ -486,7 +530,14 @@ export async function buildApp() {
           attachments: stored.map((d) => ({ name: d.filename, size: d.size })),
         },
         agent
-          ? { author: 'agent', text: agent.summary, fixture: agent.fixture }
+          ? {
+              author: 'agent',
+              // What was applied goes ahead of what was found. An analyst who
+              // ratified a rule needs to see it act, or a value that is now
+              // right looks like luck.
+              text: [describePlan(plan), agent.summary].filter(Boolean).join('\n\n'),
+              fixture: agent.fixture,
+            }
           : {
               author: 'agent',
               text: `Your documents are stored, but extraction failed. ${agentError?.message ?? ''}`.trim(),

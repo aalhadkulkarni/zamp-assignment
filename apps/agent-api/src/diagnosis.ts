@@ -32,6 +32,19 @@ export type Lesson = {
   explanation: string;
   /** What would change next time, in plain language. */
   rule: string;
+  /**
+   * The multiplier the document actually uses, when the type is units. A number
+   * because a units lesson is arithmetic we can check ourselves, and asking the
+   * model to restate "in thousands" as prose every time is asking it to make
+   * the same judgement twice.
+   */
+  unitsMultiplier: number | null;
+  /**
+   * The label as printed, when the type is synonym or concept_confusion. This
+   * rides with the field into the output schema, so it is the exact string the
+   * next extraction is told to match on — or told to stay away from.
+   */
+  documentLabel: string;
   confidence: 'high' | 'medium' | 'low';
 };
 
@@ -91,9 +104,28 @@ export function diagnosisSchema(fieldKeys: string[]) {
               description:
                 'What you would do differently next time, stated as an instruction to yourself. Empty when the scope is none.',
             },
+            unitsMultiplier: {
+              type: ['number', 'null'],
+              description:
+                'Only when type is units: what the figures in this document are actually in, as a number — 1000 for thousands, 1000000 for millions. Null for every other type.',
+            },
+            documentLabel: {
+              type: 'string',
+              description:
+                'Only when type is synonym or concept_confusion: the label exactly as printed in the document, copied character for character. For a synonym this is the label that should have been recognised; for a concept_confusion it is the label that was read by mistake. Empty string for every other type.',
+            },
             confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
           },
-          required: ['type', 'scope', 'fieldKeys', 'explanation', 'rule', 'confidence'],
+          required: [
+            'type',
+            'scope',
+            'fieldKeys',
+            'explanation',
+            'rule',
+            'unitsMultiplier',
+            'documentLabel',
+            'confidence',
+          ],
           additionalProperties: false,
         },
       },

@@ -233,6 +233,8 @@ export type ReviewField = {
   sourcePage: number | null;
   sourceText: string;
   reasoning: string;
+  /** Set when a lesson the analyst ratified changed this row after extraction. */
+  lessonNote?: string;
 };
 
 export type ModelReply = {

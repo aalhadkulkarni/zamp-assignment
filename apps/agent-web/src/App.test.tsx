@@ -66,6 +66,7 @@ const server = {
 
   reset() {
     server.analyses.clear();
+    server.nextFields = FIELDS;
     server.restoreUpload();
 
     mockListFunds.mockResolvedValue(FUNDS);
@@ -130,7 +131,7 @@ const server = {
         },
         { id: crypto.randomUUID(), author: 'agent', text: AGENT_TEXT },
       );
-      analysis.fields = structuredClone(FIELDS);
+      analysis.fields = structuredClone(server.nextFields);
       return {
         uploadId: 'upload-1',
         analysisId,
@@ -139,7 +140,7 @@ const server = {
         agent: {
           model: 'claude-opus-5',
           summary: AGENT_TEXT,
-          fields: structuredClone(FIELDS),
+          fields: structuredClone(server.nextFields),
           usage: { inputTokens: 24180, outputTokens: 742 },
           fixture: false,
         },
@@ -147,6 +148,9 @@ const server = {
       };
     });
   },
+
+  /** What the next extraction finds. Defaults to FIELDS; reset between tests. */
+  nextFields: FIELDS as api.ReviewField[],
 
   /** Lets a test hand back proposed lessons from the next submit. */
   diagnoses(diagnosis: api.Diagnosis) {
@@ -334,7 +338,7 @@ describe('sending', () => {
         agent: {
           model: 'claude-opus-5',
           summary: AGENT_TEXT,
-          fields: structuredClone(FIELDS),
+          fields: structuredClone(server.nextFields),
           usage: { inputTokens: 24180, outputTokens: 742 },
           fixture: true,
         },
@@ -605,6 +609,8 @@ describe('sending', () => {
       fieldKeys: ['total_investments'],
       explanation: 'I applied the thousands heading, but the figure you kept is the printed one.',
       rule: 'For this fund, check whether the investments section restates its units.',
+      unitsMultiplier: 1,
+      documentLabel: '',
       confidence: 'medium' as const,
     };
 
@@ -623,6 +629,34 @@ describe('sending', () => {
       await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
       return user;
     }
+
+    /**
+     * A ratified units lesson moves a value by a factor of a thousand without
+     * asking. The row has to say so, or the analyst has no way to tell a rule
+     * they agreed to from the model getting quietly worse.
+     */
+    it('shows on the row when a lesson changed a value', async () => {
+      server.nextFields = [
+        {
+          ...FIELDS[0],
+          value: 462_090_073,
+          unitsMultiplier: 1,
+          lessonNote:
+            'Read as 1,000×; you confirmed this fund reports in 1s, so that is what was used.',
+        },
+      ];
+
+      const user = userEvent.setup();
+      await startAnalysis(user);
+      await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+      await user.click(screen.getByRole('button', { name: 'Send' }));
+      await screen.findByRole('table');
+
+      expect(await screen.findByText(/Applied what you confirmed/)).toBeInTheDocument();
+      expect(screen.getByText(/you confirmed this fund reports in 1s/)).toBeInTheDocument();
+      // The value shown is the one the lesson produced, not the model's.
+      expect(screen.getByLabelText('total_investments value')).toHaveValue('462090073');
+    });
 
     it('proposes a diagnosis with its reasoning and its reach', async () => {
       await corrected();
