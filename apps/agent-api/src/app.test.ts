@@ -1819,7 +1819,7 @@ describe('GET /field-definitions', () => {
   it('says so when the customer cannot be reached', async () => {
     const { listFieldDefinitions, CustomerSystemError } = await import('./customer.js');
     vi.mocked(listFieldDefinitions).mockRejectedValueOnce(
-      new CustomerSystemError('customer-system is unreachable'),
+      new CustomerSystemError('customer-system is unreachable', 0),
     );
     const res = await app.inject({ method: 'GET', url: '/field-definitions' });
 
