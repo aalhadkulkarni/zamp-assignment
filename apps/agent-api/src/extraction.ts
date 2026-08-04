@@ -20,7 +20,24 @@ export type ExtractedField = {
   reasoning: string;
 };
 
+/**
+ * What the model believes it has been handed, before it reads anything out of it.
+ *
+ * Three answers, not two. Many ACFR pages never name their issuer — a statement
+ * of fiduciary net position mid-document often carries no fund name at all — so
+ * "I cannot tell" has to be sayable. Treating silence as a mismatch would refuse
+ * correct documents, and a false refusal is expensive: the analyst has the right
+ * pages and is being told they do not.
+ */
+export type DocumentCheck = {
+  /** What the document appears to be about, in the model's own words. */
+  describes: string;
+  verdict: 'matches' | 'mismatch' | 'cannot_tell';
+  reasoning: string;
+};
+
 export type Extraction = {
+  document: DocumentCheck;
   summary: string;
   /** Keyed by field, because the schema names one property per field. */
   fields: Record<string, Omit<ExtractedField, 'key'>>;
@@ -134,6 +151,30 @@ export function extractionSchema(fields: FieldDefinition[], guidance?: FieldGuid
   return {
     type: 'object',
     properties: {
+      document: {
+        type: 'object',
+        description:
+          'What you have been handed. Answer this before reading any figures out of it.',
+        properties: {
+          describes: {
+            type: 'string',
+            description:
+              'Which issuer and which period these pages appear to be about, as best you can tell from them. Say so plainly if nothing on them identifies either.',
+          },
+          verdict: {
+            type: 'string',
+            enum: ['matches', 'mismatch', 'cannot_tell'],
+            description:
+              'matches: these pages are this fund. mismatch: they are positively a different issuer — only when something on the page names one. cannot_tell: nothing here identifies the issuer either way, which is common and is not a problem.',
+          },
+          reasoning: {
+            type: 'string',
+            description: 'What on the page led you to that, quoted where you can.',
+          },
+        },
+        required: ['describes', 'verdict', 'reasoning'],
+        additionalProperties: false,
+      },
       summary: {
         type: 'string',
         description:
@@ -146,7 +187,7 @@ export function extractionSchema(fields: FieldDefinition[], guidance?: FieldGuid
         additionalProperties: false,
       },
     },
-    required: ['summary', 'fields'],
+    required: ['document', 'summary', 'fields'],
     additionalProperties: false,
   };
 }

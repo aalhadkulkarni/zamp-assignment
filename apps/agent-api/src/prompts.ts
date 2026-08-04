@@ -72,6 +72,10 @@ ${history
 Find these values:
 ${wanted}
 ${note}
+Before anything else, check what you have been given.
+
+These pages are supposed to be from ${fundName}. Say whether they are, in the document field, and do that before reading a single figure. Only answer mismatch when something on the page positively names a different issuer — a fund name in a heading, a plan title, a letterhead. Pages pulled from the middle of a report frequently name nobody at all, and that is normal: answer cannot_tell and carry on extracting as usual. Refusing a correct document is worse than reading an ambiguous one, because the analyst has the right pages in front of them and is being told they do not.
+
 How to read the document:
 ${learned}${past}
 Units are usually declared once, in a heading far from the figures they govern — "Dollars in Thousands" or similar. Report the figure exactly as printed and state the multiplier separately. Do not do the multiplication yourself.

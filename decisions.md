@@ -456,3 +456,18 @@ The migration is CREATE TABLE IF NOT EXISTS plus ALTER TABLE ADD COLUMN IF NOT E
 The tests could not see it. pg-mem builds every table from the current schema, so it never has the old shape to be wrong about. Only a database with history does, which is exactly what the deployed one is.
 
 Dropping the column explicitly fixes it. The wider point is that this migration strategy has a ceiling: it expresses additions and nothing else, and anything that removes or renames has to be written by hand and verified somewhere the old shape actually exists. That is fine at this size, and would not be for long.
+
+
+32 - The agent checks whose document it is before reading it.
+
+Nothing verified that the pages uploaded to a CalPERS analysis were CalPERS pages. The obvious cost is wrong figures written to the customer's database. The expensive one is quieter: an analyst correcting a value read from a CalSTRS statement teaches a lesson scoped to CalPERS, and that rule then applies to every future document from a fund it was never about. It is the longest-tailed mistake this system can make, and nothing stood in its way.
+
+The extraction schema now requires a verdict on the document before any figures are asked for. Three answers, not two, and the third is the one that matters: matches, mismatch, cannot_tell.
+
+A two-way check would have been wrong. Pension reports are hundreds of pages and the useful ones here are cut from the middle - a statement of fiduciary net position frequently carries no letterhead, no plan title and no fund name anywhere on it. Treating silence as a mismatch would refuse correct documents routinely, and a false refusal is worse than the thing it prevents: the analyst is holding exactly the right pages and is being told they are not, with no way forward. So only a positive identification of a different issuer stops anything.
+
+On a mismatch nothing is extracted and nothing is stored. A value from the wrong fund is worse than no value, because a blank is obvious and a wrong number is not - the same reasoning as decision 12. The documents are kept, because the analyst may well be right and we should not make them pick the files again to argue.
+
+The recorded reply exercises the path too, by reading the filename. There is no letterhead in a buffer of zeroes, so the name stands in for one - enough that uploading calstrs-2024.pdf to a CalPERS analysis demonstrates the whole refusal without an API key.
+
+What is not built: overruling is a sentence in the chat that nothing acts on. Sending the same documents again produces the same refusal. The honest version is a "read them anyway" the analyst can click, and it is listed rather than built.

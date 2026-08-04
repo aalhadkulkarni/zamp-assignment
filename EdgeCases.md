@@ -67,7 +67,7 @@ This is a genuine A/B: same fund, same documents, split by strategy, measured on
 correction rate. Worth saying in the docs that we chose 4a for the demo and why,
 rather than presenting it as the only option.
 
-### 1.5 Documents are for the wrong fund · **open**
+### 1.5 Documents are for the wrong fund · **handled**
 
 Nothing checks. CalSTRS pages uploaded to a CalPERS analysis will be extracted
 happily, written to the customer's database under the wrong fund, and — worse —
@@ -81,6 +81,18 @@ is expensive: the analyst has the right document and is being told they do not.
 So the model should report what it believes the document is about, with
 confidence, and the *analyst* decides; a hard block belongs only at high
 confidence of a mismatch.
+
+**Built.** The extraction schema now requires a `document` verdict before any
+figures are asked for, with three answers rather than two: `matches`, `mismatch`,
+and `cannot_tell`. Only a positive mismatch stops anything — a page that names no
+issuer is the common case for pages cut from mid-document, and refusing those
+would tell an analyst holding exactly the right pages that they are not. On a
+mismatch nothing is extracted and nothing is stored, the documents are kept, and
+the analyst is told what the pages look like and how to overrule it.
+
+Still **open**: overruling is a sentence in the chat, and nothing acts on it —
+re-sending the same documents produces the same refusal. A one-click "read them
+anyway" is the missing half.
 
 ---
 
@@ -322,7 +334,7 @@ The list only grows. Fine for a demo, awkward within a day of real use.
 
 If time is short, these are the ones that would embarrass us in a review:
 
-1. **1.5 wrong-fund documents** — teaches wrong lessons, longest tail
+1. ~~**1.5 wrong-fund documents**~~ — done
 2. **5.1 / 5.2 no view or revoke for lessons** — the inverse of the core promise
 3. **2.8 fabricated provenance** — undermines the thing the analyst trusts
 4. **1.2 / 4.5 corrections stranded after a failed submit** — silently loses the

@@ -218,10 +218,37 @@ export async function extract(
  */
 export async function extractFixture(
   prompt: string,
-  _attachments: Attachment[],
+  attachments: Attachment[],
   schema: Record<string, unknown>,
 ): Promise<ExtractionReply> {
   await sleep(fixtureDelayMs());
+
+  // Reading the filename is how the recording can disagree with the analyst.
+  // A real model reads the letterhead; there isn't one in a buffer of zeroes,
+  // so the name stands in for it — enough to exercise the whole mismatch path
+  // by uploading something called calstrs-2024.pdf to a CalPERS analysis.
+  const askedFor = /working on ([^.]+)\./.exec(prompt)?.[1] ?? '';
+  const named = attachments.map((a) => a.filename.toLowerCase()).join(' ');
+  const elsewhere = ['calstrs', 'nyslrs', 'texas', 'florida', 'ohio'].find(
+    (fund) => named.includes(fund) && !askedFor.toLowerCase().includes(fund),
+  );
+
+  if (elsewhere) {
+    return {
+      model: 'claude-opus-5',
+      fixture: true,
+      usage: { inputTokens: 3_100, outputTokens: 120 },
+      extraction: {
+        document: {
+          describes: elsewhere.toUpperCase(),
+          verdict: 'mismatch',
+          reasoning: `The heading on the first page names ${elsewhere.toUpperCase()}.`,
+        },
+        summary: 'I have not read any figures out of these pages.',
+        fields: {},
+      },
+    };
+  }
 
   const taught = describedFields(schema);
 
@@ -245,6 +272,14 @@ export async function extractFixture(
     fixture: true,
     usage: { inputTokens: 24_180, outputTokens: 742 },
     extraction: {
+      document: {
+        describes: `${askedFor || 'the fund named in this analysis'}, statement of fiduciary net position`,
+        // Nothing on a mid-document statement page names the issuer, which is
+        // the common case and is not a problem.
+        verdict: 'cannot_tell',
+        reasoning:
+          'These pages carry the statement itself with no letterhead or plan title, so nothing on them identifies the issuer either way.',
+      },
       summary:
         summary +
         (knowsReceivablesLabel

@@ -1659,3 +1659,144 @@ describe('the corrections in the conversation', () => {
     }
   });
 });
+
+/**
+ * Documents for the wrong fund.
+ *
+ * The expensive version of this is not the wrong numbers — it is that a
+ * correction made against another issuer's document teaches a lesson about this
+ * one. That rule then applies to every future document from a fund it was never
+ * about.
+ */
+describe('checking the document is for this fund', () => {
+  function replyWith(document: object, fields: object = EXTRACTION.fields) {
+    return {
+      model: 'claude-opus-5',
+      stop_reason: 'end_turn',
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify({ document, summary: 'A summary.', fields }),
+        },
+      ],
+      usage: { input_tokens: 100, output_tokens: 10 },
+    };
+  }
+
+  it('asks the model to check before it asks for any figures', async () => {
+    await upload([pdf('acfr.pdf')]);
+
+    const { messages, output_config } = lastCall();
+    const prompt = messages[0].content.at(-1).text;
+    expect(prompt).toContain('Before anything else, check what you have been given');
+    expect(prompt).toContain('CalPERS');
+
+    // Required, so it cannot be skipped, and it names all three answers.
+    const schema = output_config.format.schema;
+    expect(schema.required).toContain('document');
+    expect(schema.properties.document.properties.verdict.enum).toEqual([
+      'matches',
+      'mismatch',
+      'cannot_tell',
+    ]);
+  });
+
+  it('reads nothing out of a document that is positively another fund', async () => {
+    create.mockResolvedValue(
+      replyWith({
+        describes: 'CalSTRS, not CalPERS',
+        verdict: 'mismatch',
+        reasoning: 'The first page is headed California State Teachers.',
+      }),
+    );
+
+    const { analysis } = await upload([pdf('calstrs.pdf')]);
+
+    // Nothing stored. A value from the wrong fund is worse than no value.
+    expect(analysis.fields).toEqual([]);
+    expect(analysis.extraction.state).toBe('failed');
+    expect(analysis.extraction.error).toContain('CalSTRS');
+  });
+
+  it('says what it thinks the document is, and what to do about it', async () => {
+    create.mockResolvedValue(
+      replyWith({
+        describes: 'CalSTRS, not CalPERS',
+        verdict: 'mismatch',
+        reasoning: 'The first page is headed California State Teachers.',
+      }),
+    );
+
+    const { analysis } = await upload([pdf('calstrs.pdf')]);
+    const said = lastAgentMessage(analysis);
+
+    expect(said?.variant).toBe('error');
+    // Names the fund it should have been, then why it thinks otherwise. The
+    // full fund name appears once — repeated three times it read like a form
+    // letter, which is what it looked like on screen.
+    expect(said?.text).toContain('do not look like CalPERS');
+    expect(said?.text).toContain('headed California State Teachers');
+    // Not a dead end: the analyst can overrule us, and is told how.
+    expect(said?.text).toMatch(/send them again/i);
+  });
+
+  /** The documents are still stored — the analyst may well be right. */
+  it('keeps the documents it refused to read', async () => {
+    create.mockResolvedValue(
+      replyWith({ describes: 'CalSTRS', verdict: 'mismatch', reasoning: 'Headed CalSTRS.' }),
+    );
+    await upload([pdf('calstrs.pdf', 128)]);
+
+    const { rows } = await getPool().query(
+      'SELECT filename FROM document WHERE analysis_id = $1',
+      [ANALYSIS],
+    );
+    expect(rows.map((r) => r.filename)).toEqual(['calstrs.pdf']);
+  });
+
+  /**
+   * The common case, and the one a naive check gets wrong. Pages cut from the
+   * middle of a report name nobody. Refusing them would tell an analyst holding
+   * exactly the right document that they are not.
+   */
+  it('extracts normally when the pages do not name any issuer', async () => {
+    create.mockResolvedValue(
+      replyWith({
+        describes: 'a statement of fiduciary net position, issuer not named',
+        verdict: 'cannot_tell',
+        reasoning: 'No letterhead or plan title on these pages.',
+      }),
+    );
+
+    const { analysis } = await upload([pdf('page-42.pdf')]);
+
+    expect(analysis.fields).toHaveLength(2);
+    expect(analysis.extraction).toEqual({ state: 'idle', error: null });
+  });
+
+  it('extracts normally when the document confirms the fund', async () => {
+    create.mockResolvedValue(
+      replyWith({
+        describes: 'CalPERS, year ended 30 June 2025',
+        verdict: 'matches',
+        reasoning: 'Headed California Public Employees Retirement System.',
+      }),
+    );
+
+    const { analysis } = await upload([pdf('acfr.pdf')]);
+    expect(analysis.fields).toHaveLength(2);
+    expect(analysis.extraction.state).toBe('idle');
+  });
+
+  /** A recorded reply has to exercise the path too, or the demo cannot show it. */
+  it('the recording refuses a file named for another fund', async () => {
+    process.env.USE_FIXTURES = 'true';
+
+    const wrong = await upload([pdf('calstrs-2024.pdf')]);
+    expect(wrong.analysis.fields).toEqual([]);
+    expect(lastAgentMessage(wrong.analysis)?.text).toContain('CALSTRS');
+
+    const right = await upload([pdf('calpers-2024.pdf')]);
+    expect(right.analysis.fields).toHaveLength(5);
+  });
+});

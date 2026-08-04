@@ -72,6 +72,34 @@ export async function runExtraction(input: ExtractionInput): Promise<void> {
       extractionSchema(definitions, plan.guidance) as unknown as Record<string, unknown>,
     );
 
+    // A document that is positively somebody else's is not extracted from at
+    // all. Storing its figures would write another fund's numbers into this
+    // fund's record, and — worse — any correction the analyst then made would
+    // teach a lesson about this fund from a document that was never about it.
+    // That is the longest-tailed mistake this system can make.
+    //
+    // Only a positive mismatch stops anything. 'cannot_tell' is the common case
+    // for pages cut from the middle of a report, and is treated as a match.
+    const check = reply.extraction.document;
+    if (check?.verdict === 'mismatch') {
+      log.warn({ analysisId, describes: check.describes }, 'documents are for another fund');
+      // The fund's full name is long, and repeating it three times in one
+      // message reads like a form letter. Said once, up front, where it matters.
+      await appendMessages(analysisId, [
+        {
+          author: 'agent',
+          text:
+            `These pages do not look like ${fundName}. ${check.reasoning} ` +
+            `I have not read any values out of them. If I have that wrong, send them again ` +
+            `and say so in the message — otherwise upload the right documents.`,
+          variant: 'error' as const,
+          fixture: reply.fixture,
+        },
+      ]);
+      await finishExtraction(analysisId, `These pages appear to be ${check.describes}.`);
+      return;
+    }
+
     // The multiplication happens here, not in the model, and a ratified units
     // lesson is enforced here too. See applyUnits.
     const fields = toReviewFields(reply.extraction, plan.expectedMultiplier);
