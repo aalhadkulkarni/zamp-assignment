@@ -6,8 +6,10 @@ dist
 test-results
 playwright-report
 
-# Screenshots taken while verifying things by hand
+# Screenshots and throwaway scripts from verifying things by hand
 /*.png
+/*.tmp.mjs
+/*.tmp.ts
 
 # Uploaded documents
 .data
