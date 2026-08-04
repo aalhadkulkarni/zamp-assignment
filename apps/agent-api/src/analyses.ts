@@ -14,6 +14,8 @@ export type StoredMessage = {
   variant?: 'error';
   fixture?: boolean;
   attachments?: { name: string; size: number }[];
+  /** Set when the message records a batch of corrections the analyst made. */
+  corrections?: { fieldKey: string; from: string; to: string }[];
 };
 
 export type StoredLesson = {
@@ -99,7 +101,7 @@ export async function getAnalysis(
 
   const [messages, fields, lessons, correctionRows] = await Promise.all([
     pool.query(
-      `SELECT id, author, body, variant, fixture, attachments
+      `SELECT id, author, body, variant, fixture, attachments, corrections
          FROM message WHERE analysis_id = $1 ORDER BY seq`,
       [analysisId],
     ),
@@ -153,6 +155,7 @@ export async function getAnalysis(
       ...(m.variant ? { variant: m.variant } : {}),
       ...(m.fixture ? { fixture: true } : {}),
       ...(m.attachments ? { attachments: m.attachments } : {}),
+      ...(m.corrections ? { corrections: m.corrections } : {}),
     })),
     // Postgres returns numeric as a string so it cannot silently lose precision
     // on the way out. These are whole dollars in the billions, so the conversion
@@ -307,8 +310,9 @@ export async function appendMessages(
   for (const message of messages) {
     seq += 1;
     await pool.query(
-      `INSERT INTO message (id, analysis_id, seq, author, body, variant, fixture, attachments)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
+      `INSERT INTO message (id, analysis_id, seq, author, body, variant, fixture,
+                            attachments, corrections)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         analysisId,
         seq,
@@ -317,6 +321,7 @@ export async function appendMessages(
         message.variant ?? null,
         message.fixture ?? false,
         message.attachments ? JSON.stringify(message.attachments) : null,
+        message.corrections ? JSON.stringify(message.corrections) : null,
       ],
     );
   }

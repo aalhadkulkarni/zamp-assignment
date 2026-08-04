@@ -415,3 +415,14 @@ Measured in a browser: the button releases 4.3 seconds after the click, having c
 Extraction state and diagnosis state are separate columns rather than one "the agent is busy" flag. They start at different moments, fail independently, and an analysis can plausibly be having a new document read while an older batch of corrections is still being explained. One flag would have had to pick which of those to describe.
 
 The failure path matters more here than for extraction, because the corrections are already stored and the write already succeeded. An explanation that fails is not a lost correction - it is a missing sentence about a correction that is safely recorded, and the message says exactly that.
+
+
+29 - What the analyst changed is part of the conversation.
+
+The corrections were rendered from browser state while they were being made, and nothing recorded them once they were sent. So the moment an analyst confirmed, the draft block disappeared and the agent's explanation arrived with nothing above it saying what had been changed. The one message that most needs its subject stated was the one without it.
+
+Submitting corrections now appends an analyst message the same way uploading documents does, and it survives a refresh for the same reason.
+
+Stored structurally - field, from, to - rather than written into the message body as prose. The browser already formats a value in the review table, and having the server write "$462,090,073,000" into a string would put currency formatting in two places that would eventually disagree. It also keeps the record honest about what was typed: a value that is not a number is shown as entered rather than dressed up as money.
+
+One message for the batch, not one per field, for the same reason the batch is diagnosed together. Six values changed by the same factor is one thing that happened.

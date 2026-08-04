@@ -343,6 +343,32 @@
   margin-top: 12px;
 }
 
+/* The edit itself, sitting directly above the agent's explanation of it. */
+.message-corrections {
+  list-style: none;
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.message-corrections li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.correction-field {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+}
+
+.correction-change {
+  color: var(--muted);
+}
+
 .row-rejected {
   background: var(--danger-bg);
 }

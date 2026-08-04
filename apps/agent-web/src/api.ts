@@ -54,6 +54,8 @@ export type StoredMessage = {
   variant?: 'error';
   fixture?: boolean;
   attachments?: { name: string; size: number }[];
+  /** Set when the message records a batch of corrections the analyst made. */
+  corrections?: { fieldKey: string; from: string; to: string }[];
 };
 
 /** The whole analysis as the server holds it. The browser renders this rather

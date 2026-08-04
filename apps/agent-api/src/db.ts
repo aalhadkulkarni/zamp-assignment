@@ -120,6 +120,10 @@ const SCHEMA = `
     variant     text,
     fixture     boolean NOT NULL DEFAULT false,
     attachments jsonb,
+    -- What the analyst changed, when the message is a batch of corrections.
+    -- Structured rather than written into the body so the browser formats the
+    -- values the same way the review table does.
+    corrections jsonb,
     created_at  timestamptz NOT NULL DEFAULT now()
   );
 
@@ -199,6 +203,7 @@ const SCHEMA = `
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS extraction_started_at timestamptz;
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_state text NOT NULL DEFAULT 'idle';
   ALTER TABLE analysis ADD COLUMN IF NOT EXISTS diagnosis_error text;
+  ALTER TABLE message ADD COLUMN IF NOT EXISTS corrections jsonb;
 `;
 
 export async function migrate(): Promise<void> {

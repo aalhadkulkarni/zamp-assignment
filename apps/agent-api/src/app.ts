@@ -362,6 +362,23 @@ export async function buildApp() {
     const batchId = crypto.randomUUID();
     await storeCorrections(analysisId, batchId, edits);
 
+    // What the analyst did belongs in the conversation, the same way their
+    // uploaded documents do. Without this the corrections were only ever drawn
+    // from browser state before submitting, so the moment they were sent they
+    // disappeared — leaving the agent's explanation with nothing above it
+    // saying what had been changed.
+    await appendMessages(analysisId, [
+      {
+        author: 'analyst',
+        text: `Corrected ${edits.length} value${edits.length === 1 ? '' : 's'}.`,
+        corrections: edits.map((edit) => ({
+          fieldKey: edit.fieldKey,
+          from: edit.from,
+          to: edit.to,
+        })),
+      },
+    ]);
+
     // Deliberately not awaited. Working out why a value changed is a model call,
     // and the analyst has already been told their write succeeded — there is
     // nothing left for this request to report. The proposed lessons arrive on

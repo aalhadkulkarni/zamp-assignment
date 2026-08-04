@@ -125,8 +125,14 @@ const server = {
 
     // Records the corrections and nothing else, as a 202 does. A test that
     // wants an explanation calls server.diagnoses() and then finishes it.
-    mockSubmitEdits.mockImplementation(async (analysisId) => {
+    mockSubmitEdits.mockImplementation(async (analysisId, _fundId, edits) => {
       const analysis = server.analyses.get(analysisId)!;
+      analysis.messages.push({
+        id: crypto.randomUUID(),
+        author: 'analyst',
+        text: `Corrected ${edits.length} value${edits.length === 1 ? '' : 's'}.`,
+        corrections: edits.map((e) => ({ fieldKey: e.fieldKey, from: e.from, to: e.to })),
+      });
       analysis.diagnosis = { state: 'running', error: null };
       if (server.autoFinish) setTimeout(() => server.finishDiagnosis(analysisId), 0);
       return { batchId: 'batch-1', received: 1 };
@@ -1502,5 +1508,53 @@ describe('while the agent is explaining a correction', () => {
     expect(
       screen.queryByText(/Working out what caused those corrections…/),
     ).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The edit itself, in the conversation, above the agent's explanation of it.
+ * It used to be drawn from browser state only until it was submitted, so the
+ * moment it was sent the reasoning had nothing above it saying what changed.
+ */
+describe('the correction in the chat', () => {
+  async function correctAndWrite(value: string) {
+    const user = userEvent.setup();
+    await startAnalysis(user);
+    await user.upload(screen.getByLabelText(/Choose documents/), pdf('acfr.pdf'));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('table');
+
+    await user.type(screen.getByLabelText('Period ending'), '2025-06-30');
+    await user.clear(screen.getByLabelText('total_investments value'));
+    await user.type(screen.getByLabelText('total_investments value'), value);
+    await user.tab();
+    await user.click(screen.getByRole('button', { name: 'Confirm and write' }));
+    return user;
+  }
+
+  it('says which field changed and what it changed from and to', async () => {
+    await correctAndWrite('462090073');
+
+    const log = within(screen.getByRole('log'));
+    expect(await log.findByText('total_investments')).toBeInTheDocument();
+    // The readable form, matching the table rather than raw digits.
+    expect(log.getByText('$462,090,073,000 → $462,090,073')).toBeInTheDocument();
+  });
+
+  /** It has to outlive the submit, which is exactly what used to fail. */
+  it('is still there after the corrections have been sent', async () => {
+    await correctAndWrite('462090073');
+
+    // The draft block is gone; the recorded message is not.
+    expect(screen.queryByText(/not yet submitted/)).not.toBeInTheDocument();
+    expect(within(screen.getByRole('log')).getByText(/Corrected 1 value/)).toBeInTheDocument();
+  });
+
+  it('shows a value that is not a number as it was typed', async () => {
+    await correctAndWrite('see note 7');
+
+    expect(
+      within(screen.getByRole('log')).getByText('$462,090,073,000 → see note 7'),
+    ).toBeInTheDocument();
   });
 });

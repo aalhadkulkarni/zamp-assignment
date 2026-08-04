@@ -1548,3 +1548,93 @@ describe('one extraction at a time', () => {
     expect(second.analysis.extraction.state).toBe('idle');
   });
 });
+
+/**
+ * What the analyst changed belongs in the conversation, above the explanation of
+ * why. Before this the corrections were only ever drawn from browser state
+ * before they were submitted, so sending them made them vanish — leaving the
+ * agent reasoning about an edit nothing on screen described.
+ */
+describe('the corrections in the conversation', () => {
+  const EDIT = {
+    id: 'e1',
+    fieldKey: 'total_investments',
+    from: '462090073000',
+    to: '462090073',
+    at: '2026-08-04T10:00:00.000Z',
+    context: { sourceText: 'x', sourcePage: 1, confidence: 'high', reasoning: 'PERF A column.' },
+  };
+
+  async function correct(edits: object[]) {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/analyses/${ANALYSIS}/edits`,
+      payload: { fundId: 'calpers', edits },
+    });
+    expect(res.statusCode).toBe(202);
+    return settled(ANALYSIS, 'diagnosis');
+  }
+
+  it('records the edit as something the analyst did', async () => {
+    const analysis = await correct([EDIT]);
+
+    const said = analysis.messages.find(
+      (m: { corrections?: unknown[] }) => m.corrections !== undefined,
+    );
+    expect(said.author).toBe('analyst');
+    expect(said.text).toBe('Corrected 1 value.');
+    expect(said.corrections).toEqual([
+      { fieldKey: 'total_investments', from: '462090073000', to: '462090073' },
+    ]);
+  });
+
+  /** The edit has to be above the reasoning, not after it. */
+  it('puts what changed before the explanation of why', async () => {
+    const analysis = await correct([EDIT]);
+
+    const edit = analysis.messages.findIndex(
+      (m: { corrections?: unknown[] }) => m.corrections !== undefined,
+    );
+    const why = analysis.messages.findIndex((m: { author: string }, i: number) => i > edit && m.author === 'agent');
+    expect(edit).toBeGreaterThanOrEqual(0);
+    expect(why).toBeGreaterThan(edit);
+  });
+
+  it('keeps every field in the batch, in one message', async () => {
+    const analysis = await correct([
+      EDIT,
+      { ...EDIT, id: 'e2', fieldKey: 'net_position', from: '', to: '444460764000' },
+    ]);
+
+    const withCorrections = analysis.messages.filter(
+      (m: { corrections?: unknown[] }) => m.corrections !== undefined,
+    );
+    expect(withCorrections).toHaveLength(1);
+    expect(withCorrections[0].text).toBe('Corrected 2 values.');
+    expect(withCorrections[0].corrections.map((c: { fieldKey: string }) => c.fieldKey)).toEqual([
+      'total_investments',
+      'net_position',
+    ]);
+  });
+
+  /** It survives a refresh, like everything else that was said. */
+  it('is still there when the analysis is read back', async () => {
+    await correct([EDIT]);
+
+    const reread = (await app.inject({ method: 'GET', url: `/analyses/${ANALYSIS}` })).json();
+    expect(
+      reread.messages.find((m: { corrections?: unknown[] }) => m.corrections !== undefined)
+        .corrections,
+    ).toHaveLength(1);
+  });
+
+  /** A message that is not a correction should not carry an empty list. */
+  it('does not attach corrections to messages that have none', async () => {
+    await upload([pdf('acfr.pdf')]);
+
+    const analysis = (await app.inject({ method: 'GET', url: `/analyses/${ANALYSIS}` })).json();
+    for (const message of analysis.messages) {
+      expect(message.corrections).toBeUndefined();
+    }
+  });
+});
